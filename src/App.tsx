@@ -133,7 +133,12 @@ export default function App() {
             savedCode.current = code;
             savedPlayerId.current = playerId;
             setError(null);
-            setAnnouncements([`Joined room ${code} successfully!`]);
+            const localPlayer = updatedRoom.players[playerId];
+            const isSpectator = updatedRoom.gameState !== 'lobby' && localPlayer?.role === 'spectator';
+            const msg = isSpectator
+              ? `Joined room ${code} as a Spectator! Viewing match in progress.`
+              : `Joined room ${code} successfully!`;
+            setAnnouncements([msg]);
             soundManager.playJoin();
             break;
           }
@@ -344,18 +349,20 @@ export default function App() {
   };
 
   const handleSendMovement = useCallback((x: number, y: number) => {
+    if (room?.players[currentPlayerId || '']?.role === 'spectator') return;
     sendWS({
       type: 'move',
       payload: { x, y }
     });
-  }, [sendWS]);
+  }, [sendWS, room, currentPlayerId]);
 
   const handleSendTag = useCallback((hiderId: string) => {
+    if (room?.players[currentPlayerId || '']?.role === 'spectator') return;
     sendWS({
       type: 'tag',
       payload: { hiderId }
     });
-  }, [sendWS]);
+  }, [sendWS, room, currentPlayerId]);
 
   const handleUpdateCustomization = useCallback((color: string, accessory: string, hair?: string, outfit?: string, glasses?: string) => {
     const updated = saveCustomization({ color, accessory, hair, outfit, glasses });

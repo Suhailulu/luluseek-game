@@ -7,6 +7,7 @@ import { soundManager } from '../lib/sound';
 import { recordMatchEnd, MatchRewardCalculation } from '../lib/progression';
 import { addMatchHistoryEntry } from '../lib/socialAndSettings';
 import { PingLatencyChart } from './PingLatencyChart';
+import { TopTaggersSummary } from './TopTaggersSummary';
 
 // Landmark Zone interface and definitions for maps
 export interface LandmarkZone {
@@ -363,7 +364,41 @@ function GameView({
   const frameTimeRef = useRef(0);
   const lastPerfUpdateTimeRef = useRef(0);
   const [perfStats, setPerfStats] = useState({ cpu: 0, render: 0, frame: 0 });
-  const [showPerfOverlay, setShowPerfOverlay] = useState(true);
+  const [showPerfOverlay, setShowPerfOverlay] = useState(() => {
+    try {
+      const saved = localStorage.getItem('hide_seek_perf_overlay');
+      return saved === 'true'; // Defaults to hidden (false) unless saved as true
+    } catch (e) {
+      return false;
+    }
+  });
+
+  const handleTogglePerfOverlay = (e?: React.SyntheticEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    soundManager.playClick();
+    setShowPerfOverlay(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hide_seek_perf_overlay', next.toString());
+      } catch (err) {}
+      return next;
+    });
+  };
+
+  const handleClosePerfOverlay = (e?: React.SyntheticEvent) => {
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    soundManager.playClick();
+    setShowPerfOverlay(false);
+    try {
+      localStorage.setItem('hide_seek_perf_overlay', 'false');
+    } catch (err) {}
+  };
   const renderedObstaclesCountRef = useRef(0);
   const viewportSizeRef = useRef({ width: window.innerWidth, height: window.innerHeight });
   const lastStaminaUiUpdateRef = useRef(0);
@@ -634,8 +669,9 @@ function GameView({
   const [isTimerOverlayExpanded, setIsTimerOverlayExpanded] = useState(false);
   const [isHidingBannerDismissed, setIsHidingBannerDismissed] = useState(false);
   const fullMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cameraFocusRef = useRef<'self' | { x: number; y: number }>('self');
+  const cameraFocusRef = useRef<'self' | string | { x: number; y: number }>('self');
   const [hasCustomCamera, setHasCustomCamera] = useState(false);
+  const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
   const pingsRef = useRef<{ x: number; y: number; radius: number; maxRadius: number; color: string; life: number }[]>([]);
 
   // Reset hiding banner on phase start
@@ -807,58 +843,78 @@ function GameView({
   })();
 
   // Fullscreen, prediction, interpolation, and extrapolation synchronization
+  const userExitedFullscreenRef = useRef(false);
+
   const enterFullscreen = () => {
+    if (userExitedFullscreenRef.current) return;
     const elem = document.documentElement;
-    if (elem.requestFullscreen) {
-      elem.requestFullscreen().then(() => {
-        setIsFullscreen(true);
-        setNeedsFullscreenClick(false);
-      }).catch((err) => {
-        console.warn("Fullscreen request rejected:", err);
+    console.log("[FULLSCREEN EVENT] Requesting full screen display...");
+    const req = elem.requestFullscreen || (elem as any).webkitRequestFullscreen || (elem as any).mozRequestFullScreen || (elem as any).msRequestFullscreen;
+    if (req) {
+      try {
+        const promise = req.call(elem);
+        if (promise && typeof promise.then === 'function') {
+          promise.then(() => {
+            console.log("[FULLSCREEN EVENT] Fullscreen active.");
+            setIsFullscreen(true);
+            setNeedsFullscreenClick(false);
+          }).catch((err: any) => {
+            console.warn("[FULLSCREEN EVENT] Fullscreen request blocked by browser:", err);
+            setIsFullscreen(false);
+            setNeedsFullscreenClick(true);
+          });
+        } else {
+          setIsFullscreen(true);
+          setNeedsFullscreenClick(false);
+        }
+      } catch (err) {
+        console.warn("[FULLSCREEN EVENT] Error triggering fullscreen:", err);
         setNeedsFullscreenClick(true);
-      });
-    } else if ((elem as any).webkitRequestFullscreen) {
-      (elem as any).webkitRequestFullscreen();
-      setIsFullscreen(true);
-      setNeedsFullscreenClick(false);
-    } else if ((elem as any).msRequestFullscreen) {
-      (elem as any).msRequestFullscreen();
-      setIsFullscreen(true);
-      setNeedsFullscreenClick(false);
+      }
     } else {
+      console.warn("[FULLSCREEN EVENT] Fullscreen API unavailable on this device.");
       setNeedsFullscreenClick(true);
     }
   };
 
   const exitFullscreen = () => {
-    if (document.fullscreenElement) {
-      if (document.exitFullscreen) {
-        document.exitFullscreen().then(() => {
-          setIsFullscreen(false);
-        }).catch(err => console.warn(err));
-      } else if ((document as any).webkitExitFullscreen) {
-        (document as any).webkitExitFullscreen();
-        setIsFullscreen(false);
-      } else if ((document as any).msExitFullscreen) {
-        (document as any).msExitFullscreen();
-        setIsFullscreen(false);
+    userExitedFullscreenRef.current = true;
+    console.log("[FULLSCREEN EVENT] Exiting fullscreen mode...");
+    if (document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement) {
+      const exit = document.exitFullscreen || (document as any).webkitExitFullscreen || (document as any).mozCancelFullScreen || (document as any).msExitFullscreen;
+      if (exit) {
+        try {
+          const promise = exit.call(document);
+          if (promise && typeof promise.then === 'function') {
+            promise.then(() => setIsFullscreen(false)).catch(err => console.warn(err));
+          } else {
+            setIsFullscreen(false);
+          }
+        } catch (e) {}
       }
+    } else {
+      setIsFullscreen(false);
     }
   };
 
   useEffect(() => {
     if (room.gameState === 'hiding' || room.gameState === 'playing') {
-      enterFullscreen();
+      if (!userExitedFullscreenRef.current && !document.fullscreenElement) {
+        enterFullscreen();
+      }
     }
-    return () => {
-      exitFullscreen();
-    };
   }, [room.gameState]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      const isCurrentlyFullscreen = !!document.fullscreenElement;
+      const isCurrentlyFullscreen = !!(document.fullscreenElement || (document as any).webkitFullscreenElement || (document as any).mozFullScreenElement);
+      console.log("[FULLSCREEN EVENT] Document fullscreen state changed:", isCurrentlyFullscreen);
       setIsFullscreen(isCurrentlyFullscreen);
+      if (!isCurrentlyFullscreen && !userExitedFullscreenRef.current) {
+        setNeedsFullscreenClick(true);
+      } else if (isCurrentlyFullscreen) {
+        setNeedsFullscreenClick(false);
+      }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
@@ -1078,18 +1134,25 @@ function GameView({
     };
   }, [socket, currentPlayerId]);
 
-  // Track container viewport dimensions with ResizeObserver to eliminate getBoundingClientRect thrashing
+  // Track container viewport dimensions with ResizeObserver and orientationchange support
   useEffect(() => {
     const updateSize = () => {
       const container = containerRef.current;
+      let w = window.innerWidth;
+      let h = window.innerHeight;
       if (container) {
         const rect = container.getBoundingClientRect();
-        viewportSizeRef.current = {
-          width: Math.max(Math.floor(rect.width || window.innerWidth), 320),
-          height: Math.max(Math.floor(rect.height || window.innerHeight), 240)
-        };
-      } else {
-        viewportSizeRef.current = { width: window.innerWidth, height: window.innerHeight };
+        if (rect.width > 0 && rect.height > 0) {
+          w = rect.width;
+          h = rect.height;
+        }
+      }
+      w = Math.max(Math.floor(w), 320);
+      h = Math.max(Math.floor(h), 240);
+
+      if (viewportSizeRef.current.width !== w || viewportSizeRef.current.height !== h) {
+        console.log("[RESIZE EVENT] Viewport resized:", `${w}x${h}`);
+        viewportSizeRef.current = { width: w, height: h };
       }
     };
 
@@ -1101,10 +1164,19 @@ function GameView({
       observer.observe(container);
     }
 
-    window.addEventListener('resize', updateSize);
+    const handleResize = () => updateSize();
+    const handleOrientation = () => {
+      updateSize();
+      setTimeout(updateSize, 100);
+      setTimeout(updateSize, 300);
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleOrientation);
     return () => {
       if (observer) observer.disconnect();
-      window.removeEventListener('resize', updateSize);
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleOrientation);
     };
   }, []);
 
@@ -1116,6 +1188,37 @@ function GameView({
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // WebGL / Canvas 2D Graphics Context Recovery
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleContextLost = (e: Event) => {
+      e.preventDefault();
+      console.error("[GRAPHICS CONTEXT ERROR] Graphics context was lost!");
+      setAssetError("Graphics context was lost. Attempting recovery...");
+      canvasInitializedRef.current = false;
+    };
+
+    const handleContextRestored = () => {
+      console.log("[GRAPHICS CONTEXT RESTORED] Graphics context restored.");
+      setAssetError(null);
+      canvasInitializedRef.current = false;
+    };
+
+    canvas.addEventListener('contextlost', handleContextLost);
+    canvas.addEventListener('contextrestored', handleContextRestored);
+    canvas.addEventListener('webglcontextlost', handleContextLost);
+    canvas.addEventListener('webglcontextrestored', handleContextRestored);
+
+    return () => {
+      canvas.removeEventListener('contextlost', handleContextLost);
+      canvas.removeEventListener('contextrestored', handleContextRestored);
+      canvas.removeEventListener('webglcontextlost', handleContextLost);
+      canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+    };
   }, []);
 
   // Lock screen orientation to landscape when supported
@@ -1313,11 +1416,6 @@ function GameView({
         return;
       }
 
-      if (!canvasInitializedRef.current) {
-        canvasInitializedRef.current = true;
-        console.log("Canvas initialized", canvas, ctx);
-      }
-
       // Use viewportSizeRef updated via ResizeObserver to eliminate layout thrashing inside 60FPS loop
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = viewportSizeRef.current.width;
@@ -1346,6 +1444,21 @@ function GameView({
       const room = roomRef.current;
       const currentMap = getMapById(room.activeMapId || room.settings.mapId);
       const isExhausted = isExhaustedRef.current;
+
+      if (!canvasInitializedRef.current) {
+        canvasInitializedRef.current = true;
+        console.log("[RENDERER INIT] Game canvas and 2D graphics context initialized.", {
+          bufferWidth: bufferW,
+          bufferHeight: bufferH,
+          cssWidth: cssW,
+          cssHeight: cssH,
+          devicePixelRatio: dpr,
+          activeMap: room.activeMapId || room.settings.mapId
+        });
+        console.log("[SCENE LOAD] Game scene initialized with map:", room.activeMapId || room.settings.mapId, "Obstacles count:", currentMap.obstacles.length);
+        console.log("[CAMERA CREATION] Camera initialized at position:", cameraRef.current, "Zoom:", zoomRef.current);
+        console.log("[ASSET LOADING] Map assets verified and ready.");
+      }
 
       // FPS tracking for dynamic device quality adjustment
       frameCountRef.current++;
@@ -1384,8 +1497,8 @@ function GameView({
         let dx = 0;
         let dy = 0;
 
-        // Seeker movement is locked during 'hiding' countdown
-        const canMove = !(room.gameState === 'hiding' && p.role === 'seeker');
+        // Seeker movement is locked during 'hiding' countdown; Spectators cannot move
+        const canMove = p.role !== 'spectator' && !(room.gameState === 'hiding' && p.role === 'seeker');
 
         if (canMove) {
           // Keyboard controls
@@ -1803,10 +1916,24 @@ function GameView({
         const leadX = (localVelocityRef.current?.x || 0) * 0.15;
         const leadY = (localVelocityRef.current?.y || 0) * 0.15;
 
-        let targetCamX = p.x + leadX;
-        let targetCamY = p.y + leadY;
+        let targetCamX = p ? p.x + leadX : MAP_WIDTH / 2;
+        let targetCamY = p ? p.y + leadY : MAP_HEIGHT / 2;
 
-        if (cameraFocusRef.current !== 'self') {
+        if (p?.role === 'spectator' && cameraFocusRef.current === 'self') {
+          const activePlayers = (Object.values(localPlayersRef.current) as Player[]).filter(pl => pl.role !== 'spectator' && pl.status === 'alive');
+          if (activePlayers.length > 0) {
+            targetCamX = activePlayers[0].x;
+            targetCamY = activePlayers[0].y;
+          }
+        }
+
+        if (typeof cameraFocusRef.current === 'string' && cameraFocusRef.current !== 'self') {
+          const targetPlayer = localPlayersRef.current[cameraFocusRef.current];
+          if (targetPlayer) {
+            targetCamX = targetPlayer.x;
+            targetCamY = targetPlayer.y;
+          }
+        } else if (typeof cameraFocusRef.current === 'object' && cameraFocusRef.current !== null) {
           targetCamX = cameraFocusRef.current.x;
           targetCamY = cameraFocusRef.current.y;
         }
@@ -1837,6 +1964,20 @@ function GameView({
           cameraRef.current.y = Math.max(halfVH, Math.min(cameraRef.current.y, MAP_HEIGHT - halfVH));
         } else {
           cameraRef.current.y = MAP_HEIGHT / 2;
+        }
+
+        // Sanity check to prevent NaN/infinite camera coordinates from causing a black screen
+        if (isNaN(cameraRef.current.x) || !isFinite(cameraRef.current.x)) {
+          console.warn("[CAMERA RECOVERY] Camera X was invalid! Resetting to center.");
+          cameraRef.current.x = MAP_WIDTH / 2;
+        }
+        if (isNaN(cameraRef.current.y) || !isFinite(cameraRef.current.y)) {
+          console.warn("[CAMERA RECOVERY] Camera Y was invalid! Resetting to center.");
+          cameraRef.current.y = MAP_HEIGHT / 2;
+        }
+        if (isNaN(zoomRef.current) || !isFinite(zoomRef.current) || zoomRef.current <= 0) {
+          console.warn("[CAMERA RECOVERY] Camera Zoom was invalid! Resetting to 0.85.");
+          zoomRef.current = 0.85;
         }
 
         // Print requested browser console telemetry every 2.5 seconds
@@ -2245,6 +2386,7 @@ function GameView({
       // Gather current roles
       const localMe = localPlayersRef.current[currentPlayerId];
       const meIsSeeker = localMe?.role === 'seeker';
+      const meIsSpectator = localMe?.role === 'spectator' || localMe?.status === 'found';
 
       // Draw Players under Bushes (so bushes render on top, making players hidden!)
       const playersList = Object.values(localPlayersRef.current) as Player[];
@@ -2259,7 +2401,7 @@ function GameView({
         const myBushId = localMe ? getHidingBushId(localMe.x, localMe.y, PLAYER_RADIUS, currentMap) : null;
 
         // VISIBILITY LOGIC
-        // Hiders always see themselves and other hiders.
+        // Hiders & Spectators always see all players.
         // Seekers DO NOT see hiders who are inside a bush, UNLESS the seeker is inside the exact same bush!
         let isVisible = true;
         
@@ -2270,6 +2412,8 @@ function GameView({
               const inVisibleArea = distToMe < 260;
               const bushCheck = !playerBushId || (playerBushId === myBushId);
               isVisible = inVisibleArea && bushCheck;
+            } else if (meIsSpectator) {
+              isVisible = true;
             }
           }
         }
@@ -2285,7 +2429,7 @@ function GameView({
         ctx.fill();
 
         // Spectator/Ghost translucent draw
-        if (player.status === 'found') {
+        if (player.role === 'spectator' || player.status === 'found') {
           ctx.globalAlpha = 0.45;
         } else if (playerBushId) {
           ctx.globalAlpha = 0.65;
@@ -3246,6 +3390,22 @@ function GameView({
         {/* 4. PREVENT HUD FROM RENDERING WITHOUT ACTUAL GAME SCENE */}
         {isSceneReady && !assetError && (
           <>
+        {/* FULLSCREEN RE-ENTRY PROMPT BANNER */}
+        {needsFullscreenClick && !isFullscreen && (
+          <div className="absolute top-14 left-1/2 -translate-x-1/2 z-40 pointer-events-auto" id="fullscreen-prompt-banner">
+            <button
+              type="button"
+              onClick={() => {
+                soundManager.playClick();
+                userExitedFullscreenRef.current = false;
+                enterFullscreen();
+              }}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-4 py-1.5 rounded-full text-xs uppercase tracking-wider shadow-2xl flex items-center gap-1.5 animate-bounce cursor-pointer border-2 border-slate-900"
+            >
+              <span>⛶ Tap to Enter Fullscreen</span>
+            </button>
+          </div>
+        )}
         {/* FLOATING HUD TOP BAR (Sleek, Compact & Low Profile for Mobile) */}
         <div className="absolute top-1.5 left-2 right-2 sm:top-3 sm:left-3 sm:right-3 z-30 flex items-center justify-between pointer-events-none" id="floating-top-bar">
           
@@ -3335,10 +3495,8 @@ function GameView({
           {/* Top Right: Stats / Performance & Settings button */}
           <div className="flex items-center gap-1 sm:gap-1.5 pointer-events-auto relative">
             <button
-              onClick={() => {
-                soundManager.playClick();
-                setShowPerfOverlay(!showPerfOverlay);
-              }}
+              type="button"
+              onClick={handleTogglePerfOverlay}
               className={`bg-slate-900/85 backdrop-blur-md border rounded-lg px-2 py-1 sm:px-2.5 sm:py-1.5 flex items-center gap-1.5 sm:gap-2.5 text-[9px] sm:text-[10px] font-bold shadow-xl transition cursor-pointer ${
                 showPerfOverlay ? 'border-cyan-400 text-cyan-300 bg-slate-900' : 'border-white/10 text-slate-300 hover:bg-slate-800'
               }`}
@@ -3356,6 +3514,7 @@ function GameView({
             </button>
 
             <button
+              type="button"
               onClick={() => {
                 soundManager.playClick();
                 setIsSettingsOpen(true);
@@ -3369,13 +3528,27 @@ function GameView({
 
             {/* IN-GAME PERFORMANCE OVERLAY PANEL */}
             {showPerfOverlay && (
-              <div className="absolute top-10 right-0 z-40 bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 rounded-xl p-3 text-[9.5px] sm:text-[10.5px] font-mono text-cyan-200 shadow-2xl pointer-events-auto w-72 sm:w-80 space-y-2 animate-in fade-in duration-150" id="perf-overlay-panel">
+              <div
+                className="absolute top-10 right-0 z-50 bg-slate-950/95 backdrop-blur-md border border-cyan-500/40 rounded-xl p-3 text-[9.5px] sm:text-[10.5px] font-mono text-cyan-200 shadow-2xl pointer-events-auto w-72 sm:w-80 space-y-2 animate-in fade-in duration-150 select-text"
+                id="perf-overlay-panel"
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
                 <div className="flex items-center justify-between border-b border-cyan-500/20 pb-1.5 font-bold text-white uppercase text-[9px] sm:text-[10px]">
                   <span className="flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"/>
                     PERFORMANCE & NETWORK DIAGNOSTICS
                   </span>
-                  <button onClick={() => setShowPerfOverlay(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer p-0.5">✕</button>
+                  <button
+                    type="button"
+                    onClick={handleClosePerfOverlay}
+                    onTouchEnd={handleClosePerfOverlay}
+                    className="text-slate-400 hover:text-white text-sm cursor-pointer p-1.5 hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center shrink-0 min-w-[28px] min-h-[28px]"
+                    title="Close Diagnostics"
+                  >
+                    ✕
+                  </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
@@ -3531,11 +3704,36 @@ function GameView({
                 const bushId = getHidingBushId(p.x, p.y, PLAYER_RADIUS, currentMap);
                 const isHiding = p.role === 'hider' && bushId && p.status === 'alive';
 
+                const isFollowed = followedPlayerId === p.id;
+
                 return (
                   <div
                     key={p.id}
-                    className="flex items-center justify-between p-2 rounded-xl border border-white/5 bg-white/5"
+                    onClick={() => {
+                      soundManager.playClick();
+                      if (p.id !== currentPlayerId) {
+                        if (followedPlayerId === p.id) {
+                          cameraFocusRef.current = 'self';
+                          setHasCustomCamera(false);
+                          setFollowedPlayerId(null);
+                        } else {
+                          cameraFocusRef.current = p.id;
+                          setHasCustomCamera(true);
+                          setFollowedPlayerId(p.id);
+                        }
+                      } else {
+                        cameraFocusRef.current = 'self';
+                        setHasCustomCamera(false);
+                        setFollowedPlayerId(null);
+                      }
+                    }}
+                    className={`flex items-center justify-between p-2 rounded-xl border cursor-pointer transition active:scale-98 ${
+                      isFollowed
+                        ? 'bg-amber-500/20 border-amber-400/80 shadow-lg shadow-amber-500/10'
+                        : 'bg-white/5 border-white/5 hover:bg-white/15'
+                    }`}
                     id={`sidebar-player-${p.id}`}
+                    title="Click to track player camera"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <div
@@ -3548,14 +3746,23 @@ function GameView({
                           {p.id === currentPlayerId && (
                             <span className="text-[7px] bg-toy-blue/20 text-toy-blue border border-toy-blue/30 px-1 py-0.2 rounded-full font-black">YOU</span>
                           )}
+                          {isFollowed && (
+                            <span className="text-[7px] bg-amber-400 text-slate-950 px-1 py-0.2 rounded-full font-black animate-pulse">FOLLOWING</span>
+                          )}
                         </p>
                         <p className="text-[8px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
-                          {p.role === 'seeker' ? 'Seeker 🔍' : 'Hider 🟢'}
+                          {p.role === 'seeker' ? 'Seeker 🔍' : p.role === 'spectator' ? 'Spectator 👁️' : 'Hider 🟢'}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0 scale-90">
+                      {p.role === 'spectator' && (
+                        <span className="text-[8px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1.5 py-0.5">
+                          SPECTATING
+                        </span>
+                      )}
+
                       {p.role === 'seeker' && (
                         <span className="text-[8px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded px-1.5 py-0.5">
                           TAGS: {p.score || 0}
@@ -4036,11 +4243,95 @@ function GameView({
           </div>
         )}
 
-        {/* SPECTATOR GHOST BADGE */}
-        {currentPlayer?.status === 'found' && (
-          <div className="absolute top-16 sm:top-20 left-2.5 sm:left-4 bg-slate-900/90 border border-white/10 rounded-xl px-3 py-1.5 text-[10px] font-black text-rose-400 flex items-center gap-1.5 shadow-2xl pointer-events-auto" id="spectator-badge">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-            <span>SPECTATING GHOST</span>
+        {/* SPECTATOR HUD & PLAYER FOLLOW TOGGLE BAR */}
+        {(currentPlayer?.role === 'spectator' || currentPlayer?.status === 'found') && !isSidebarOpen && (
+          <div className="absolute top-16 sm:top-20 left-2.5 sm:left-4 z-30 flex flex-col gap-2 pointer-events-auto max-w-[280px] sm:max-w-xs" id="spectator-hud-panel">
+            {/* Spectator Status Badge */}
+            <div className="bg-slate-900/90 border border-amber-500/30 backdrop-blur-md rounded-xl px-3 py-1.5 text-[10px] font-black text-amber-400 flex items-center justify-between gap-2 shadow-2xl">
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                <span>{currentPlayer?.role === 'spectator' ? '👁️ SPECTATOR MODE' : '👻 SPECTATING GHOST'}</span>
+              </div>
+              {followedPlayerId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundManager.playClick();
+                    cameraFocusRef.current = 'self';
+                    setHasCustomCamera(false);
+                    setFollowedPlayerId(null);
+                  }}
+                  className="text-[9px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded px-1.5 py-0.5 cursor-pointer font-bold transition active:scale-95"
+                  id="spectator-reset-cam-btn"
+                >
+                  Reset Camera ↺
+                </button>
+              )}
+            </div>
+
+            {/* Player Camera Follow Selectors */}
+            <div className="bg-slate-900/85 backdrop-blur-md border border-white/10 rounded-2xl p-2.5 shadow-2xl flex flex-col gap-1.5">
+              <div className="text-[9px] font-black uppercase tracking-wider text-slate-400 flex items-center justify-between">
+                <span>Follow Player:</span>
+                {followedPlayerId ? (
+                  <span className="text-amber-400 font-bold truncate max-w-[110px]">
+                    🎥 {room.players[followedPlayerId]?.name || 'Player'}
+                  </span>
+                ) : (
+                  <span className="text-slate-500 font-medium">Click icon to follow</span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar" id="spectator-players-bar">
+                {Object.values(room.players)
+                  .filter(p => p.id !== currentPlayerId && p.role !== 'spectator')
+                  .map(p => {
+                    const isTarget = followedPlayerId === p.id;
+                    const isSeeker = p.role === 'seeker';
+                    const isAlive = p.status === 'alive';
+
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          soundManager.playClick();
+                          if (isTarget) {
+                            cameraFocusRef.current = 'self';
+                            setHasCustomCamera(false);
+                            setFollowedPlayerId(null);
+                          } else {
+                            cameraFocusRef.current = p.id;
+                            setHasCustomCamera(true);
+                            setFollowedPlayerId(p.id);
+                          }
+                        }}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black transition cursor-pointer shrink-0 active:scale-95 ${
+                          isTarget
+                            ? 'bg-amber-500/25 border-amber-400 text-white shadow-lg shadow-amber-500/20 ring-1 ring-amber-400'
+                            : 'bg-white/5 border-white/10 text-slate-300 hover:bg-white/10 hover:border-white/20'
+                        }`}
+                        title={`Click to follow ${p.name}'s camera view`}
+                        id={`spectator-follow-btn-${p.id}`}
+                      >
+                        <div
+                          className="w-2.5 h-2.5 rounded-full border border-black/30 shrink-0"
+                          style={{ backgroundColor: p.color }}
+                        />
+                        <span className="truncate max-w-[70px]">{p.name}</span>
+                        <span className="text-[8px] opacity-80">
+                          {isSeeker ? '🔍' : isAlive ? '🟢' : '💀'}
+                        </span>
+                        {isTarget && (
+                          <span className="text-[8px] bg-amber-400 text-slate-950 px-1 rounded-full font-black animate-pulse">
+                            LIVE
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -4321,6 +4612,15 @@ function GameView({
                 </div>
               </div>
             )}
+
+            {/* PERSISTENT TOP TAGGERS STATS SUMMARY */}
+            <div className="mb-5">
+              <TopTaggersSummary
+                roomPlayers={room.players}
+                roomStats={room.stats}
+                currentPlayerId={currentPlayerId}
+              />
+            </div>
 
             {/* Detailed Player Performance List */}
             <div className="bg-white/5 border border-white/5 rounded-2xl p-4 text-left mb-5" id="detailed-performances">

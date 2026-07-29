@@ -554,28 +554,27 @@ wss.on('connection', (ws) => {
             break;
           }
 
-          // Check for new joiner limits
-          if (room.gameState !== 'lobby') {
-            console.error(`[DEBUG] Any network or synchronization error: Cannot join room ${targetCode} because game is already in state ${room.gameState}`);
-            ws.send(JSON.stringify({ type: 'error', payload: 'Game already started. Please wait for the match to end.' }));
-            return;
-          }
-
+          // Check for capacity limits
           if (playersList.length >= room.settings.maxPlayers) {
             console.error(`[DEBUG] Any network or synchronization error: Room ${targetCode} is full (${playersList.length}/${room.settings.maxPlayers})`);
             ws.send(JSON.stringify({ type: 'error', payload: `This room is full (Max ${room.settings.maxPlayers} players).` }));
             return;
           }
 
+          const isMidGame = room.gameState !== 'lobby';
           const playerId = clientPlayerId || ('p-' + Math.random().toString(36).substring(2, 9));
+          const spawn = isMidGame
+            ? getRandomSpawnPoint(false, room.activeMapId || room.settings.mapId)
+            : { x: 0, y: 0 };
+
           const newPlayer: Player = {
             id: playerId,
             name: nameClean,
             role: 'spectator',
-            x: 0,
-            y: 0,
+            x: spawn.x,
+            y: spawn.y,
             status: 'alive',
-            ready: false,
+            ready: isMidGame ? true : false,
             isHost: false,
             color: customization?.color || getRandomPlayerColor(room),
             accessory: customization?.accessory || 'none',
@@ -590,7 +589,7 @@ wss.on('connection', (ws) => {
           room.players[playerId] = newPlayer;
           sessions.set(ws, { ws, playerId, roomCode: targetCode });
 
-          console.log(`[DEBUG] Player joined: ${newPlayer.name} (${playerId}) in room ${targetCode}`);
+          console.log(`[DEBUG] Player joined as ${isMidGame ? 'spectator' : 'player'}: ${newPlayer.name} (${playerId}) in room ${targetCode}`);
 
           ws.send(JSON.stringify({
             type: 'join-success',
@@ -858,7 +857,7 @@ wss.on('connection', (ws) => {
           if (!room || (room.gameState !== 'hiding' && room.gameState !== 'playing')) return;
 
           const player = room.players[session.playerId];
-          if (!player || player.status === 'found') return;
+          if (!player || player.status === 'found' || player.role === 'spectator') return;
 
           // Seeker cannot move during hiding countdown phase
           if (room.gameState === 'hiding' && player.role === 'seeker') {

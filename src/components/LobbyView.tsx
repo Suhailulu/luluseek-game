@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, ChangeEvent, MouseEvent } from 'react';
 import { motion } from 'motion/react';
 import { Room, RoomSettings } from '../types';
-import { Users, Music, Volume2, Shield, LogOut, Copy, Check, Sparkles, Shuffle, RotateCcw, MessageSquare, Send, Trophy, Coins, Award, User, Flame, Smile, ThumbsUp, Heart } from 'lucide-react';
+import { Users, Music, Volume2, Shield, LogOut, Copy, Check, Sparkles, Shuffle, RotateCcw, MessageSquare, Send, Trophy, Coins, Award, User, Flame, Smile, ThumbsUp, Heart, Target } from 'lucide-react';
 import { soundManager } from '../lib/sound';
+import { TopTaggersSummary } from './TopTaggersSummary';
 import {
   COLOR_OPTIONS,
   ACCESSORY_OPTIONS,
@@ -59,6 +60,7 @@ export default function LobbyView({
     localStorage.setItem('hide_seek_guide_seen', 'true');
     setShowTutorialModal(false);
   };
+  const [showTagStatsModal, setShowTagStatsModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'color' | 'accessory' | 'hair' | 'outfit' | 'glasses'>('color');
   const [chatInput, setChatInput] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -385,18 +387,32 @@ export default function LobbyView({
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              id="open-profile-btn"
-              onClick={() => {
-                soundManager.playClick();
-                setShowProfileModal(true);
-              }}
-              className="bg-white hover:bg-slate-100 text-toy-dark border-3 border-toy-dark px-3 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
-            >
-              <User className="w-3.5 h-3.5 text-toy-dark" />
-              <span>Profile</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="open-tag-stats-btn"
+                onClick={() => {
+                  soundManager.playClick();
+                  setShowTagStatsModal(true);
+                }}
+                className="bg-toy-orange hover:bg-orange-400 text-slate-950 border-3 border-toy-dark px-3 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
+              >
+                <Target className="w-3.5 h-3.5 text-slate-950" />
+                <span>Tag Stats</span>
+              </button>
+              <button
+                type="button"
+                id="open-profile-btn"
+                onClick={() => {
+                  soundManager.playClick();
+                  setShowProfileModal(true);
+                }}
+                className="bg-white hover:bg-slate-100 text-toy-dark border-3 border-toy-dark px-3 py-1.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-1.5 shadow active:scale-95 cursor-pointer"
+              >
+                <User className="w-3.5 h-3.5 text-toy-dark" />
+                <span>Profile</span>
+              </button>
+            </div>
           </div>
 
           {/* Room Code Indicator Card */}
@@ -1456,6 +1472,23 @@ export default function LobbyView({
                 Close Profile
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* TAG STATS SUMMARY MODAL */}
+      {showTagStatsModal && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            className="max-w-xl w-full my-auto"
+          >
+            <TopTaggersSummary
+              currentPlayerId={currentPlayerId}
+              isGameOverScreen={false}
+              onClose={() => setShowTagStatsModal(false)}
+            />
           </motion.div>
         </div>
       )}
