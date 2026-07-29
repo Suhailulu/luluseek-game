@@ -1,0 +1,6 @@
+{
+  "name": "Lulu seek",
+  "description": "A real-time top-down multiplayer hide and seek game designed for quick play with friends.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

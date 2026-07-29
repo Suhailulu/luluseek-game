@@ -1,0 +1,62 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Outfit", sans-serif;
+  
+  --color-toy-blue: #38bdf8;
+  --color-toy-sky: #e0f2fe;
+  --color-toy-yellow: #facc15;
+  --color-toy-orange: #f97316;
+  --color-toy-pink: #f472b6;
+  --color-toy-green: #4ade80;
+  --color-toy-dark: #1e293b;
+  --color-toy-cream: #fafaf9;
+}
+
+body {
+  background-color: #f0f7ff;
+  color: #1e293b;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Adorable micro-animations */
+.bounce-hover:hover {
+  transform: translateY(-2px);
+}
+
+.bouncy-pulse {
+  animation: bouncePulse 2s infinite ease-in-out;
+}
+
+@keyframes bouncePulse {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-4px) scale(1.05);
+  }
+}
+
+/* Soft, cute custom scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+  border: 2px solid #f1f5f9;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
