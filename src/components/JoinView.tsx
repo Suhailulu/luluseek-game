@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Sparkles, Gamepad2, Compass, Users, Trophy, Settings, Globe, Gift, Check, Trash2, UserPlus, Sliders, Volume2, Shield, HelpCircle, BookOpen, MessageSquare, Bug, Eye, Smartphone, VolumeX, Maximize2, Send, RotateCw } from 'lucide-react';
+import { Sparkles, Gamepad2, Compass, Users, Trophy, Settings, Globe, Gift, Check, Trash2, UserPlus, Sliders, Volume2, Shield, HelpCircle, BookOpen, MessageSquare, Bug, Eye, Smartphone, VolumeX, Maximize2, Send, RotateCw, Activity, CheckCircle2, AlertCircle, BarChart3 } from 'lucide-react';
 import { soundManager } from '../lib/sound';
+import { getGAStatus, setRuntimeMeasurementId, trackEvent, getActiveMeasurementId } from '../lib/analytics';
 import {
   getGameSettings,
   saveGameSettings,
@@ -63,6 +64,11 @@ export default function JoinView({ onJoin, onCreate, loading, error }: JoinViewP
   const [reportMessage, setReportMessage] = useState('');
   const [reportSubmitted, setReportSubmitted] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
+
+  // GA4 Measurement ID runtime state
+  const [gaInput, setGaInput] = useState<string>(getActiveMeasurementId() || '');
+  const [gaFeedbackMessage, setGaFeedbackMessage] = useState<string | null>(null);
+  const gaStatus = getGAStatus();
 
   // Auto-fill room code from URL parameters or location hash (e.g., ?code=ABCD or #ABCD)
   useEffect(() => {
@@ -821,6 +827,74 @@ export default function JoinView({ onJoin, onCreate, loading, error }: JoinViewP
                     <span>Large Button Mode</span>
                   </label>
                 </div>
+              </div>
+
+              {/* Google Analytics 4 Setup Section */}
+              <div className="border-t-2 border-slate-200 pt-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-black text-xs uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    <BarChart3 className="w-3.5 h-3.5 text-emerald-600" /> Google Analytics 4 (GA4)
+                  </h4>
+                  {gaStatus.isInitialized ? (
+                    <span className="text-[9px] bg-emerald-100 text-emerald-800 border border-emerald-400 px-2 py-0.5 rounded-full font-black flex items-center gap-1">
+                      <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> ACTIVE
+                    </span>
+                  ) : (
+                    <span className="text-[9px] bg-amber-100 text-amber-800 border border-amber-400 px-2 py-0.5 rounded-full font-black flex items-center gap-1">
+                      <AlertCircle className="w-2.5 h-2.5 text-amber-600" /> INACTIVE
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-slate-500 font-medium">
+                  Enter your GA4 Measurement ID (e.g. <code className="bg-slate-100 px-1 rounded font-bold text-slate-700">G-XXXXXXXXXX</code>) or configure <code className="bg-slate-100 px-1 rounded font-bold text-slate-700">VITE_GA_MEASUREMENT_ID</code> in environment variables.
+                </p>
+
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    placeholder="G-XXXXXXXXXX"
+                    value={gaInput}
+                    onChange={(e) => setGaInput(e.target.value.toUpperCase().trim())}
+                    className="flex-1 bg-slate-50 border-2 border-toy-dark px-2.5 py-1.5 rounded-xl text-xs font-mono font-bold uppercase focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundManager.playClick();
+                      setRuntimeMeasurementId(gaInput);
+                      setGaFeedbackMessage('Saved & initialized!');
+                      setTimeout(() => setGaFeedbackMessage(null), 3000);
+                    }}
+                    className="bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs px-3 py-1.5 rounded-xl border-2 border-toy-dark cursor-pointer shrink-0 transition active:scale-95"
+                  >
+                    Save
+                  </button>
+                </div>
+
+                {gaStatus.isInitialized && (
+                  <div className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-xl p-2 text-[10px] text-emerald-900 font-bold">
+                    <span className="truncate">Tracking Property: <strong>{gaStatus.measurementId}</strong></span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundManager.playClick();
+                        trackEvent('test_ping_button', { timestamp: Date.now() });
+                        setGaFeedbackMessage('Sent test event to GA4 Realtime dashboard!');
+                        setTimeout(() => setGaFeedbackMessage(null), 3500);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded-lg border border-emerald-800 text-[9px] uppercase font-black shrink-0 cursor-pointer active:scale-95 transition"
+                    >
+                      Send Test Event ⚡
+                    </button>
+                  </div>
+                )}
+
+                {gaFeedbackMessage && (
+                  <div className="text-[10px] font-black text-emerald-600 bg-emerald-100 border border-emerald-300 rounded-lg p-1.5 text-center">
+                    {gaFeedbackMessage}
+                  </div>
+                )}
               </div>
             </div>
 

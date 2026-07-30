@@ -16,15 +16,21 @@
   --color-toy-cream: #fafaf9;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 body {
   background-color: #f0f7ff;
   color: #1e293b;
   font-family: var(--font-sans);
-  overflow: hidden;
   margin: 0;
   padding: 0;
-  touch-action: none;
-  overscroll-behavior: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;

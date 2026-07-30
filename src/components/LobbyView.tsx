@@ -356,13 +356,13 @@ export default function LobbyView({
   };
 
   return (
-    <div className="flex flex-col flex-grow min-h-0 font-sans text-toy-dark" id="lobby-root">
+    <div className="flex flex-col flex-grow w-full h-auto font-sans text-toy-dark" id="lobby-root">
       
       {/* Lobby Grid layout */}
-      <div className="flex flex-col lg:flex-row flex-grow min-h-0 border-b-4 border-toy-dark">
+      <div className="flex flex-col lg:flex-row flex-grow w-full h-auto border-b-4 border-toy-dark">
         
         {/* LEFT COLUMN: Customizer, Map Select & Volume Settings */}
-        <div className="w-full lg:w-1/2 border-r-0 lg:border-r-4 border-toy-dark p-4 md:p-6 space-y-6 bg-white overflow-y-auto" id="lobby-settings-column">
+        <div className="w-full lg:w-1/2 border-r-0 lg:border-r-4 border-toy-dark p-4 md:p-6 space-y-6 bg-white h-auto" id="lobby-settings-column">
           
           {/* PLAYER PROGRESSION & PROFILE HEADER CARD */}
           <div className="bg-amber-400 border-4 border-toy-dark p-3.5 rounded-2xl flex items-center justify-between shadow-[4px_4px_0px_#1e293b] gap-3">
@@ -935,7 +935,7 @@ export default function LobbyView({
         </div>
 
         {/* RIGHT COLUMN: Active Players Roster */}
-        <div className="flex-1 p-4 md:p-6 overflow-hidden flex flex-col bg-slate-50" id="lobby-players-column">
+        <div className="flex-1 p-4 md:p-6 flex flex-col bg-slate-50 h-auto" id="lobby-players-column">
           <h2 className="text-toy-dark font-black text-lg mb-4 flex items-center gap-2">
             <Users className="w-5 h-5 text-toy-blue" />
             Players in Lobby ({players.length})
@@ -947,7 +947,7 @@ export default function LobbyView({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 flex-1 content-start overflow-y-auto pr-1" id="players-roster">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 content-start pr-1" id="players-roster">
             {players.map((p) => {
               const isMe = p.id === currentPlayerId;
               

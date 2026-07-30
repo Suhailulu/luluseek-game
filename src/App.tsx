@@ -7,6 +7,9 @@ import { Wifi, WifiOff, RefreshCw, Volume2, VolumeX, Gamepad2 } from 'lucide-rea
 import { motion, AnimatePresence } from 'motion/react';
 import { soundManager } from './lib/sound';
 import { getSavedCustomization, saveCustomization } from './lib/customization';
+import { initGA, trackPageView, trackEvent, getGAStatus } from './lib/analytics';
+import { GADiagnosticsModal } from './components/GADiagnosticsModal';
+import { BarChart2 } from 'lucide-react';
 
 export default function App() {
   const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -17,6 +20,7 @@ export default function App() {
   const [announcements, setAnnouncements] = useState<string[]>([]);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
+  const [isGaDiagnosticsOpen, setIsGaDiagnosticsOpen] = useState(false);
   const [lastEmote, setLastEmote] = useState<{ playerId: string; emote: string; timestamp: number } | null>(null);
 
   const [ping, setPing] = useState<number>(0);
@@ -297,6 +301,29 @@ export default function App() {
     return () => clearInterval(interval);
   }, [socket, socketStatus, sendWS]);
 
+  // Initialize Google Analytics on mount
+  useEffect(() => {
+    initGA();
+  }, []);
+
+  // Track page view automatically when view state changes
+  useEffect(() => {
+    let viewPath = '/';
+    let viewTitle = 'Lulu Seek - Home';
+
+    if (room) {
+      if (room.gameState === 'lobby') {
+        viewPath = `/lobby/${room.code}`;
+        viewTitle = `Lulu Seek - Lobby (${room.code})`;
+      } else {
+        viewPath = `/game/${room.code}/${room.gameState}`;
+        viewTitle = `Lulu Seek - Match (${room.code} - ${room.gameState})`;
+      }
+    }
+
+    trackPageView(viewPath, viewTitle);
+  }, [room?.code, room?.gameState]);
+
   // Actions trigger functions
   const handleCreateRoom = (name: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -305,6 +332,7 @@ export default function App() {
     }
     savedName.current = name;
     const savedCustomization = getSavedCustomization();
+    trackEvent('create_room', { player_name: name });
     sendWS({
       type: 'create-room',
       payload: { name, customization: savedCustomization }
@@ -319,6 +347,7 @@ export default function App() {
     savedName.current = name;
     savedCode.current = code;
     const savedCustomization = getSavedCustomization();
+    trackEvent('join_room', { player_name: name, room_code: code });
     sendWS({
       type: 'join-room',
       payload: { name, code, customization: savedCustomization }
@@ -326,6 +355,12 @@ export default function App() {
   };
 
   const handleUpdateSettings = (settings: RoomSettings) => {
+    trackEvent('update_room_settings', {
+      max_players: settings.maxPlayers,
+      map_id: settings.mapId,
+      hide_time: settings.hideTime,
+      match_duration: settings.matchDuration
+    });
     sendWS({
       type: 'update-settings',
       payload: settings
@@ -334,6 +369,7 @@ export default function App() {
 
   const handleToggleReady = () => {
     console.log('[DEBUG] Ready button clicked');
+    trackEvent('toggle_ready', { room_code: room?.code });
     sendWS({
       type: 'toggle-ready',
       payload: {}
@@ -342,6 +378,11 @@ export default function App() {
 
   const handleStartGame = () => {
     console.log('[DEBUG] Start Game requested');
+    trackEvent('start_game', {
+      room_code: room?.code,
+      map_id: room?.settings?.mapId,
+      player_count: room ? Object.keys(room.players).length : 0
+    });
     sendWS({
       type: 'start-game',
       payload: {}
@@ -358,6 +399,7 @@ export default function App() {
 
   const handleSendTag = useCallback((hiderId: string) => {
     if (room?.players[currentPlayerId || '']?.role === 'spectator') return;
+    trackEvent('tag_attempt', { hider_id: hiderId, room_code: room?.code });
     sendWS({
       type: 'tag',
       payload: { hiderId }
@@ -366,6 +408,7 @@ export default function App() {
 
   const handleUpdateCustomization = useCallback((color: string, accessory: string, hair?: string, outfit?: string, glasses?: string) => {
     const updated = saveCustomization({ color, accessory, hair, outfit, glasses });
+    trackEvent('update_customization', { color, accessory, hair, outfit, glasses });
     sendWS({
       type: 'update-customization',
       payload: updated
@@ -373,41 +416,47 @@ export default function App() {
   }, [sendWS]);
 
   const handleSendEmote = useCallback((emote: string) => {
+    trackEvent('send_emote', { emote, room_code: room?.code });
     sendWS({
       type: 'emote',
       payload: { emote }
     });
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
 
   const handleKickPlayer = useCallback((targetPlayerId: string) => {
+    trackEvent('kick_player', { target_player_id: targetPlayerId, room_code: room?.code });
     sendWS({
       type: 'kick-player',
       payload: { targetPlayerId }
     });
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
 
   const handleSendChat = useCallback((text: string) => {
+    trackEvent('send_chat', { text_length: text.length, room_code: room?.code });
     sendWS({
       type: 'chat-message',
       payload: { text }
     });
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
 
   const handleReturnToLobby = useCallback(() => {
+    trackEvent('return_to_lobby', { room_code: room?.code });
     sendWS({
       type: 'return-to-lobby',
       payload: {}
     });
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
 
   const handlePlayAgain = useCallback(() => {
+    trackEvent('play_again', { room_code: room?.code });
     sendWS({
       type: 'play-again',
       payload: {}
     });
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
 
   const handleLeaveRoom = useCallback(() => {
+    trackEvent('leave_room', { room_code: room?.code });
     sendWS({
       type: 'leave-room',
       payload: {}
@@ -419,15 +468,16 @@ export default function App() {
     savedPlayerId.current = null;
     setError(null);
     setAnnouncements([]);
-  }, [sendWS]);
+  }, [sendWS, room?.code]);
+
 
   const isPlaying = room && room.gameState !== 'lobby';
 
   return (
-    <div className={`min-h-screen bg-sky-50 text-toy-dark font-sans flex flex-col justify-between select-none ${isPlaying ? 'p-0 w-screen h-screen overflow-hidden' : 'p-2 sm:p-4 md:p-6'}`} id="app-main-layout">
+    <div className={`min-h-screen bg-sky-50 text-toy-dark font-sans flex flex-col justify-between select-none ${isPlaying ? 'p-0 w-screen h-screen overflow-hidden' : 'p-2 sm:p-4 md:p-6 min-h-screen h-auto'}`} id="app-main-layout">
       
       {/* Outer Bouncy Soft 3D Container frame */}
-      <div className={`w-full bg-white flex flex-col flex-grow relative overflow-hidden ${isPlaying ? 'border-0 rounded-none max-w-none w-full h-full' : 'max-w-7xl mx-auto border-4 border-toy-dark rounded-3xl shadow-[8px_8px_0px_#1e293b]'}`} id="app-toy-container">
+      <div className={`w-full bg-white flex flex-col flex-grow relative ${isPlaying ? 'border-0 rounded-none max-w-none w-full h-full overflow-hidden' : 'max-w-7xl mx-auto border-4 border-toy-dark rounded-3xl shadow-[8px_8px_0px_#1e293b] min-h-full h-auto overflow-x-hidden'}`} id="app-toy-container">
         
         {/* Header */}
         {!isPlaying && (
@@ -447,7 +497,21 @@ export default function App() {
           </div>
 
           {/* Connection Status & Details */}
-          <div className="flex items-center gap-4 justify-between md:justify-end" id="connection-status-panel">
+          <div className="flex items-center gap-2 sm:gap-4 justify-between md:justify-end" id="connection-status-panel">
+            {/* GA Diagnostics Button */}
+            <button
+              onClick={() => {
+                soundManager.playClick();
+                setIsGaDiagnosticsOpen(true);
+              }}
+              className="px-2.5 py-2.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border-3 border-toy-dark rounded-xl shadow-[2px_2px_0px_#1e293b] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer flex items-center gap-1.5 font-black text-xs"
+              title="Google Analytics 4 Connection Status"
+              id="ga-diagnostics-header-btn"
+            >
+              <BarChart2 className="w-4 h-4 text-emerald-600" />
+              <span className="hidden sm:inline text-[10px] uppercase tracking-wider">GA4 Status</span>
+            </button>
+
             {/* Audio Toggle button */}
             <button
               onClick={() => {
@@ -456,6 +520,7 @@ export default function App() {
                 soundManager.setSfxVolume(updated ? 0 : 0.5);
                 soundManager.setMusicVolume(updated ? 0 : 0.3);
                 soundManager.playClick();
+                trackEvent('toggle_audio', { is_muted: updated });
               }}
               className={`p-2.5 border-3 border-toy-dark rounded-xl shadow-[2px_2px_0px_#1e293b] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer ${
                 isMuted ? 'bg-rose-100 text-rose-600' : 'bg-white text-toy-dark hover:bg-slate-50'
@@ -504,7 +569,7 @@ export default function App() {
       )}
 
         {/* Main Container Views Router */}
-        <main className="flex-grow flex flex-col min-h-0 bg-white relative" id="main-view-router">
+        <main className="flex-grow flex flex-col bg-white relative w-full h-auto" id="main-view-router">
           <AnimatePresence mode="wait">
             {!room ? (
               <motion.div
@@ -512,7 +577,7 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="w-full h-full flex flex-col flex-grow"
+                className="w-full min-h-full flex flex-col flex-grow h-auto"
               >
                 <JoinView
                   onJoin={handleJoinRoom}
@@ -527,7 +592,7 @@ export default function App() {
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.98 }}
-                className="w-full h-full flex flex-col flex-grow"
+                className="w-full min-h-full flex flex-col flex-grow h-auto"
               >
                 <LobbyView
                   room={room}
@@ -582,6 +647,11 @@ export default function App() {
           </footer>
         )}
 
+        {/* GA4 Diagnostic Modal */}
+        <GADiagnosticsModal
+          isOpen={isGaDiagnosticsOpen}
+          onClose={() => setIsGaDiagnosticsOpen(false)}
+        />
       </div>
     </div>
   );

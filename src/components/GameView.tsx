@@ -4,10 +4,13 @@ import { Room, Player } from '../types';
 import { getMapById, moveWithCollision, getHidingBushId, checkCollision, MAP_WIDTH, MAP_HEIGHT, PLAYER_RADIUS } from '../map';
 import { Clock, Eye, AlertTriangle, Play, Trophy, Users, Shield, ArrowLeft, Heart, Smile, LogOut, Minimize2, Maximize2, ZoomIn, ZoomOut, Map, Check, Copy, Settings, Volume2, Music, RotateCw } from 'lucide-react';
 import { soundManager } from '../lib/sound';
+import { trackEvent } from '../lib/analytics';
+
 import { recordMatchEnd, MatchRewardCalculation } from '../lib/progression';
 import { addMatchHistoryEntry } from '../lib/socialAndSettings';
 import { PingLatencyChart } from './PingLatencyChart';
 import { TopTaggersSummary } from './TopTaggersSummary';
+import { Leaderboard } from './Leaderboard';
 
 // Landmark Zone interface and definitions for maps
 export interface LandmarkZone {
@@ -965,23 +968,33 @@ function GameView({
         const prevP = prevPlayers[p.id];
         const prevTarget = remoteTargetsRef.current[p.id];
         
-        let vx = 0;
-        let vy = 0;
-        if (prevP) {
-          const dt = (now - (prevTarget?.lastUpdate || (now - 100))) / 1000;
-          if (dt > 0) {
-            vx = (p.x - prevP.x) / dt;
-            vy = (p.y - prevP.y) / dt;
-          }
-        }
+        // Skip overwriting remote target if high-frequency WebSocket updates were received recently (< 300ms)
+        const isRecentlyUpdatedViaWS = prevTarget && (now - prevTarget.lastUpdate < 300);
         
-        remoteTargetsRef.current[p.id] = {
-          x: p.x,
-          y: p.y,
-          vx,
-          vy,
-          lastUpdate: now
-        };
+        if (!isRecentlyUpdatedViaWS) {
+          let vx = 0;
+          let vy = 0;
+          if (prevP) {
+            const dt = (now - (prevTarget?.lastUpdate || (now - 100))) / 1000;
+            if (dt > 0.01 && dt < 0.5) {
+              const rawVx = (p.x - prevP.x) / dt;
+              const rawVy = (p.y - prevP.y) / dt;
+              const speed = Math.hypot(rawVx, rawVy);
+              const maxSpeed = 500;
+              const scale = speed > maxSpeed ? maxSpeed / speed : 1;
+              vx = rawVx * scale;
+              vy = rawVy * scale;
+            }
+          }
+          
+          remoteTargetsRef.current[p.id] = {
+            x: p.x,
+            y: p.y,
+            vx,
+            vy,
+            lastUpdate: now
+          };
+        }
         
         if (!localPlayersRef.current[p.id]) {
           localPlayersRef.current[p.id] = { ...p };
@@ -1110,9 +1123,18 @@ function GameView({
             let vy = 0;
             if (prevTarget) {
               const dt = (now - prevTarget.lastUpdate) / 1000;
-              if (dt > 0) {
-                vx = (pos.x - prevTarget.x) / dt;
-                vy = (pos.y - prevTarget.y) / dt;
+              if (dt > 0.005 && dt < 0.5) {
+                const rawVx = (pos.x - prevTarget.x) / dt;
+                const rawVy = (pos.y - prevTarget.y) / dt;
+                const speed = Math.hypot(rawVx, rawVy);
+                const maxSpeed = 500;
+                const scale = speed > maxSpeed ? maxSpeed / speed : 1;
+                const clampedVx = rawVx * scale;
+                const clampedVy = rawVy * scale;
+
+                // Exponential velocity smoothing to prevent sudden velocity spikes
+                vx = prevTarget.vx * 0.35 + clampedVx * 0.65;
+                vy = prevTarget.vy * 0.35 + clampedVy * 0.65;
               }
             }
 
@@ -1259,13 +1281,35 @@ function GameView({
     announcementEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [announcements]);
 
-  // Listen to keyboard inputs including Shift (Sprint) & Tactical Hotkeys
+  // Listen to keyboard inputs including WASD, Arrow Keys, Shift (Sprint) & Tactical Hotkeys
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) {
-        keysPressed.current[k] = true;
+      // Don't intercept movement keys if user is typing in an input/textarea
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
       }
+
+      const k = e.key ? e.key.toLowerCase() : '';
+      const code = e.code ? e.code.toLowerCase() : '';
+
+      const isMoveKey =
+        ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k) ||
+        ['keyw', 'keya', 'keys', 'keyd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shiftleft', 'shiftright'].includes(code);
+
+      if (isMoveKey) {
+        if (k) keysPressed.current[k] = true;
+        if (code) keysPressed.current[code] = true;
+
+        // Prevent browser page scrolling when using Arrow keys during gameplay
+        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k) || code.startsWith('arrow')) {
+          e.preventDefault();
+        }
+      }
+
       if (k === 'm' && !e.repeat) {
         setIsFullMapOpen(prev => !prev);
       }
@@ -1279,18 +1323,25 @@ function GameView({
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k)) {
-        keysPressed.current[k] = false;
-      }
+      const k = e.key ? e.key.toLowerCase() : '';
+      const code = e.code ? e.code.toLowerCase() : '';
+
+      if (k) keysPressed.current[k] = false;
+      if (code) keysPressed.current[code] = false;
+    };
+
+    const handleBlur = () => {
+      keysPressed.current = {};
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 
@@ -1501,11 +1552,11 @@ function GameView({
         const canMove = p.role !== 'spectator' && !(room.gameState === 'hiding' && p.role === 'seeker');
 
         if (canMove) {
-          // Keyboard controls
-          if (keysPressed.current['w'] || keysPressed.current['arrowup']) dy -= 1;
-          if (keysPressed.current['s'] || keysPressed.current['arrowdown']) dy += 1;
-          if (keysPressed.current['a'] || keysPressed.current['arrowleft']) dx -= 1;
-          if (keysPressed.current['d'] || keysPressed.current['arrowright']) dx += 1;
+          // Keyboard controls (WASD & Arrow Keys)
+          if (keysPressed.current['w'] || keysPressed.current['keyw'] || keysPressed.current['arrowup']) dy -= 1;
+          if (keysPressed.current['s'] || keysPressed.current['keys'] || keysPressed.current['arrowdown']) dy += 1;
+          if (keysPressed.current['a'] || keysPressed.current['keya'] || keysPressed.current['arrowleft']) dx -= 1;
+          if (keysPressed.current['d'] || keysPressed.current['keyd'] || keysPressed.current['arrowright']) dx += 1;
 
           // 360° Analog Virtual Joystick controls
           if (joystickVectorRef.current.length > 0) {
@@ -1542,7 +1593,7 @@ function GameView({
 
           // STAMINA & SPRINT ENGINE
           const isHider = p.role === 'hider';
-          const wantSprint = !!(keysPressed.current['shift'] || mobileSprintActive.current);
+          const wantSprint = !!(keysPressed.current['shift'] || keysPressed.current['shiftleft'] || keysPressed.current['shiftright'] || mobileSprintActive.current);
           let isSprinting = false;
 
           if (isHider) {
@@ -1704,39 +1755,46 @@ function GameView({
           const elapsed = (now - target.lastUpdate) / 1000;
 
           if (localP.status === 'alive') {
-            // Target Position
-            let targetX = target.x;
-            let targetY = target.y;
+            // Predict movement up to 150ms using calculated velocity vector
+            const extrapolateTime = Math.min(Math.max(0, elapsed), 0.15);
+            let targetX = target.x + target.vx * extrapolateTime;
+            let targetY = target.y + target.vy * extrapolateTime;
 
-            // Extrapolate if we haven't received an update recently (predict movement up to 180ms)
-            if (elapsed > 0.016 && elapsed < 0.18) {
-              targetX += target.vx * deltaTime;
-              targetY += target.vy * deltaTime;
-
-              // Prevent extrapolation from walking through solid walls
-              const col = checkCollision(targetX, targetY, PLAYER_RADIUS, currentMap);
-              if (col.collided) {
-                targetX = localP.x;
-                targetY = localP.y;
-              }
+            // Prevent extrapolation from walking through solid walls
+            const col = checkCollision(targetX, targetY, PLAYER_RADIUS, currentMap);
+            if (col.collided) {
+              targetX = target.x;
+              targetY = target.y;
             }
 
-            // Smoothly interpolate position (LERP) - increased responsiveness from -15 to -22
-            const lerpFactor = Math.min(1 - Math.exp(-22 * deltaTime), 1);
+            const dx = targetX - localP.x;
+            const dy = targetY - localP.y;
+            const distSq = dx * dx + dy * dy;
 
-            const prevX = localP.x;
-            const prevY = localP.y;
+            // Teleport snap if distance error is huge (>150px)
+            if (distSq > 22500) {
+              localP.x = targetX;
+              localP.y = targetY;
+            } else {
+              // Smooth frame-rate independent LERP interpolation
+              const dist = Math.sqrt(distSq);
+              const lerpRate = dist > 40 ? 28 : 20;
+              const lerpFactor = Math.min(1 - Math.exp(-lerpRate * deltaTime), 1);
 
-            localP.x += (targetX - localP.x) * lerpFactor;
-            localP.y += (targetY - localP.y) * lerpFactor;
+              const prevX = localP.x;
+              const prevY = localP.y;
 
-            // Compute rotation angle based on movement direction
-            const moveDX = localP.x - prevX;
-            const moveDY = localP.y - prevY;
-            const moveDist = Math.sqrt(moveDX * moveDX + moveDY * moveDY);
-            if (moveDist > 0.1) {
-              localP.angle = Math.atan2(moveDY, moveDX);
-              spawnTrailParticle(localP.id, localP.x, localP.y, localP.color || '#38bdf8', moveDX, moveDY);
+              localP.x += dx * lerpFactor;
+              localP.y += dy * lerpFactor;
+
+              // Compute rotation angle based on movement direction
+              const moveDX = localP.x - prevX;
+              const moveDY = localP.y - prevY;
+              const moveDist = Math.hypot(moveDX, moveDY);
+              if (moveDist > 0.05) {
+                localP.angle = Math.atan2(moveDY, moveDX);
+                spawnTrailParticle(localP.id, localP.x, localP.y, localP.color || '#38bdf8', moveDX, moveDY);
+              }
             }
           } else {
             // Spectating/Found ghosts snap immediately
@@ -1866,7 +1924,7 @@ function GameView({
       if (p) {
         const localMe = localPlayersRef.current[currentPlayerId];
         const isHider = localMe?.role === 'hider';
-        const wantSprint = keysPressed.current['Shift'] || mobileSprintActive.current;
+        const wantSprint = !!(keysPressed.current['shift'] || keysPressed.current['shiftleft'] || keysPressed.current['shiftright'] || mobileSprintActive.current);
         const isSprinting = isHider && wantSprint && staminaRef.current > 0 && !isExhausted;
 
         // Dynamic camera FOV: Player sprite occupies ~7% of viewport height
@@ -3720,6 +3778,7 @@ function GameView({
                           cameraFocusRef.current = p.id;
                           setHasCustomCamera(true);
                           setFollowedPlayerId(p.id);
+                          trackEvent('spectator_follow_player', { target_player_id: p.id, room_code: room.code });
                         }
                       } else {
                         cameraFocusRef.current = 'self';
@@ -4304,6 +4363,7 @@ function GameView({
                             cameraFocusRef.current = p.id;
                             setHasCustomCamera(true);
                             setFollowedPlayerId(p.id);
+                            trackEvent('spectator_follow_player', { target_player_id: p.id, room_code: room.code });
                           }
                         }}
                         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-[10px] font-black transition cursor-pointer shrink-0 active:scale-95 ${
@@ -4612,6 +4672,16 @@ function GameView({
                 </div>
               </div>
             )}
+
+            {/* END-OF-GAME MATCH LEADERBOARD */}
+            <div className="mb-5">
+              <Leaderboard
+                roomPlayers={room.players}
+                roomStats={room.stats}
+                currentPlayerId={currentPlayerId}
+                playersStatsTracker={playersStatsTrackerRef.current}
+              />
+            </div>
 
             {/* PERSISTENT TOP TAGGERS STATS SUMMARY */}
             <div className="mb-5">
