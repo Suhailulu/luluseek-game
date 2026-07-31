@@ -1,12 +1,14 @@
 export type CharacterClass = 'scout' | 'ninja' | 'tank' | 'trickster' | 'explorer';
+export type PlayerRole = 'hider' | 'seeker' | 'spectator';
+export type PlayerStatus = 'alive' | 'found' | 'disconnected';
 
 export interface Player {
   id: string;
   name: string;
-  role: 'hider' | 'seeker' | 'spectator';
+  role: PlayerRole;
   x: number;
   y: number;
-  status: 'alive' | 'found' | 'disconnected';
+  status: PlayerStatus;
   ready: boolean;
   isHost: boolean;
   color: string;

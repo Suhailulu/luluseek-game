@@ -644,6 +644,36 @@ export function moveWithCollision(
   radius: number = PLAYER_RADIUS,
   map: GameMap = defaultMap
 ): { x: number; y: number } {
+  // 0. Check if current position is already stuck inside a solid collision
+  const currentCollision = checkCollision(currX, currY, radius, map);
+  if (currentCollision.collided) {
+    // Attempt to push player out along the collision normal or direction of intent
+    const nx = currentCollision.normalX || (dx !== 0 ? Math.sign(dx) : 1);
+    const ny = currentCollision.normalY || (dy !== 0 ? Math.sign(dy) : 1);
+    const step = 4;
+    const testX = currX + nx * step;
+    const testY = currY + ny * step;
+    if (!checkCollision(testX, testY, radius, map).collided) {
+      currX = testX;
+      currY = testY;
+    } else {
+      // Try 8 directional nudges if normal didn't resolve
+      const directions = [
+        { x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, { x: 0, y: -1 },
+        { x: 1, y: 1 }, { x: -1, y: 1 }, { x: 1, y: -1 }, { x: -1, y: -1 }
+      ];
+      for (const dir of directions) {
+        const tryX = currX + dir.x * step;
+        const tryY = currY + dir.y * step;
+        if (!checkCollision(tryX, tryY, radius, map).collided) {
+          currX = tryX;
+          currY = tryY;
+          break;
+        }
+      }
+    }
+  }
+
   const targetX = currX + dx;
   const targetY = currY + dy;
 

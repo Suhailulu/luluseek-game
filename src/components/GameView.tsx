@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Room, Player } from '../types';
+import { useInputManager } from '../hooks/useInputManager';
 import { getMapById, moveWithCollision, getHidingBushId, checkCollision, MAP_WIDTH, MAP_HEIGHT, PLAYER_RADIUS } from '../map';
 import { Clock, Eye, AlertTriangle, Play, Trophy, Users, Shield, ArrowLeft, Heart, Smile, LogOut, Minimize2, Maximize2, ZoomIn, ZoomOut, Map, Check, Copy, Settings, Volume2, Music, RotateCw } from 'lucide-react';
 import { soundManager } from '../lib/sound';
@@ -514,13 +515,17 @@ function GameView({
   useEffect(() => {
     let p = 0;
     const interval = setInterval(() => {
-      p += Math.floor(Math.random() * 12) + 6;
+      p += Math.floor(Math.random() * 20) + 15;
       if (p >= 100) {
         p = 100;
         clearInterval(interval);
+        setTimeout(() => {
+          setIsLoadingAssets(false);
+          setIsSceneReady(true);
+        }, 200);
       }
       setLoadingProgress(p);
-    }, 70);
+    }, 40);
     return () => clearInterval(interval);
   }, []);
   const [sfxVol, setSfxVol] = useState(soundManager.getSfxVolume());
@@ -530,14 +535,10 @@ function GameView({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [needsFullscreenClick, setNeedsFullscreenClick] = useState(false);
 
-  // Keyboard movement keys state
-  const keysPressed = useRef<Record<string, boolean>>({});
-
   // Mobile virtual joystick (360° Analog Multi-touch) & sprint state
   const [isMobile, setIsMobile] = useState(false);
   const joystickTouchIdRef = useRef<number | null>(null);
   const joystickCenterRef = useRef<{ x: number; y: number } | null>(null);
-  const joystickVectorRef = useRef<{ dx: number; dy: number; length: number }>({ dx: 0, dy: 0, length: 0 });
   const [joystickUI, setJoystickUI] = useState<{ active: boolean; startX: number; startY: number; currX: number; currY: number }>({
     active: false,
     startX: 0,
@@ -661,15 +662,34 @@ function GameView({
     }))
   );
 
-  // Mouse cursor dragging controls
-  const isMouseDownRef = useRef(false);
-  const mousePosRef = useRef<{ clientX: number; clientY: number }>({ clientX: 0, clientY: 0 });
   const lastInputVectorRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
 
   // Minimap toggling, camera focus, and map pings
   const [isMinimapOpen, setIsMinimapOpen] = useState(true);
   const [isFullMapOpen, setIsFullMapOpen] = useState(false);
   const [isTimerOverlayExpanded, setIsTimerOverlayExpanded] = useState(false);
+
+  // Unified Input Manager Hook (Gates movement based on game state & handles input listening)
+  const localMePlayer = room.players[currentPlayerId];
+  const {
+    keysPressedRef: keysPressed,
+    joystickVectorRef,
+    isMouseDownRef,
+    mousePosRef,
+    canMove: canLocalMove,
+    getMovementInput
+  } = useInputManager({
+    gameState: room.gameState,
+    role: localMePlayer?.role,
+    status: localMePlayer?.status,
+    isMobile,
+    onToggleMap: () => setIsFullMapOpen(prev => !prev),
+    onToggleTimer: () => setIsTimerOverlayExpanded(prev => !prev),
+    onCloseOverlays: () => {
+      setIsFullMapOpen(false);
+      setIsTimerOverlayExpanded(false);
+    }
+  });
   const [isHidingBannerDismissed, setIsHidingBannerDismissed] = useState(false);
   const fullMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraFocusRef = useRef<'self' | string | { x: number; y: number }>('self');
@@ -677,12 +697,15 @@ function GameView({
   const [followedPlayerId, setFollowedPlayerId] = useState<string | null>(null);
   const pingsRef = useRef<{ x: number; y: number; radius: number; maxRadius: number; color: string; life: number }[]>([]);
 
-  // Reset hiding banner on phase start
+  // Reset hiding banner on phase start & ensure gameplay scene is active
   useEffect(() => {
     if (room.gameState === 'hiding') {
+      console.log('[GAME STATE] Entered Hiding phase - movement enabled for hiders!');
+      setIsLoadingAssets(false);
+      setIsSceneReady(true);
       setIsHidingBannerDismissed(false);
     } else if (room.gameState === 'playing') {
-      console.log('[COUNTDOWN FINISHED] Transitioning from Hiding phase to active Gameplay state!');
+      console.log('[GAME STATE] Transitioning to active Gameplay state - seekers released!');
       setIsLoadingAssets(false);
       setIsSceneReady(true);
       setIsHidingBannerDismissed(true);
@@ -944,29 +967,38 @@ function GameView({
     Object.values(room.players).forEach(p => {
       if (p.id === currentPlayerId) {
         // Local Player prediction reconciliation
-        const localP = localPlayersRef.current[p.id];
-        if (localP) {
-          const dx = p.x - localP.x;
-          const dy = p.y - localP.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          
-          // Reconcile/snap if server state is significantly different (e.g. walk-back, tagged, or phase change)
-          const forcedSync = p.status !== localP.status || p.role !== localP.role || room.gameState !== lastGameStateRef.current;
-          if (dist > 24 || forcedSync) {
-            localP.x = p.x;
-            localP.y = p.y;
-            localP.status = p.status;
-            localP.role = p.role;
-            if (cameraFocusRef.current === 'self') {
-              cameraRef.current = { x: p.x, y: p.y };
-            }
-          } else if (dist > 2) {
-            // Smoothly reconcile small position drifts (server reconciliation)
-            localP.x += (p.x - localP.x) * 0.15;
-            localP.y += (p.y - localP.y) * 0.15;
+        let localP = localPlayersRef.current[p.id];
+        if (!localP) {
+          localP = { ...p };
+          localPlayersRef.current[p.id] = localP;
+          console.log(`[PLAYER INIT] Local player created in localRef: id=${p.id}, role=${p.role}, status=${p.status}, x=${p.x}, y=${p.y}`);
+        }
+
+        // Unconditionally keep player role, status, color, and name in sync
+        const roleChanged = localP.role !== p.role;
+        const statusChanged = localP.status !== p.status;
+        localP.role = p.role;
+        localP.status = p.status;
+        localP.color = p.color;
+        localP.name = p.name;
+
+        const dx = p.x - localP.x;
+        const dy = p.y - localP.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Reconcile/snap if server state is significantly different (e.g. walk-back, tagged, or phase change)
+        const forcedSync = roleChanged || statusChanged || room.gameState !== lastGameStateRef.current;
+        if (dist > 30 || forcedSync) {
+          console.log(`[STATE SYNC] Local player position/state reconciled. Role=${p.role}, Status=${p.status}, Pos=(${p.x}, ${p.y})`);
+          localP.x = p.x;
+          localP.y = p.y;
+          if (cameraFocusRef.current === 'self') {
+            cameraRef.current = { x: p.x, y: p.y };
           }
-        } else {
-          localPlayersRef.current[p.id] = { ...p };
+        } else if (dist > 2) {
+          // Smoothly reconcile small position drifts (server reconciliation)
+          localP.x += (p.x - localP.x) * 0.15;
+          localP.y += (p.y - localP.y) * 0.15;
         }
       } else {
         // Remote Player: Keep track of target coordinates & speed for extrapolation LERP
@@ -1286,69 +1318,7 @@ function GameView({
     announcementEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [announcements]);
 
-  // Listen to keyboard inputs including WASD, Arrow Keys, Shift (Sprint) & Tactical Hotkeys
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept movement keys if user is typing in an input/textarea
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement ||
-        (e.target as HTMLElement)?.isContentEditable
-      ) {
-        return;
-      }
 
-      const k = e.key ? e.key.toLowerCase() : '';
-      const code = e.code ? e.code.toLowerCase() : '';
-
-      const isMoveKey =
-        ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift'].includes(k) ||
-        ['keyw', 'keya', 'keys', 'keyd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shiftleft', 'shiftright'].includes(code);
-
-      if (isMoveKey) {
-        if (k) keysPressed.current[k] = true;
-        if (code) keysPressed.current[code] = true;
-
-        // Prevent browser page scrolling when using Arrow keys during gameplay
-        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k) || code.startsWith('arrow')) {
-          e.preventDefault();
-        }
-      }
-
-      if (k === 'm' && !e.repeat) {
-        setIsFullMapOpen(prev => !prev);
-      }
-      if (k === 't' && !e.repeat) {
-        setIsTimerOverlayExpanded(prev => !prev);
-      }
-      if (k === 'escape') {
-        setIsFullMapOpen(false);
-        setIsTimerOverlayExpanded(false);
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const k = e.key ? e.key.toLowerCase() : '';
-      const code = e.code ? e.code.toLowerCase() : '';
-
-      if (k) keysPressed.current[k] = false;
-      if (code) keysPressed.current[code] = false;
-    };
-
-    const handleBlur = () => {
-      keysPressed.current = {};
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', handleBlur);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, []);
 
   // Helper: Acquire a particle slot from particlePoolRef without GC allocations
   const acquireParticleSlot = () => {
@@ -1561,29 +1531,21 @@ function GameView({
       }
 
       // 2. UPDATE CLIENT-SIDE PLAYER PHYSICS (WITH ARCADE-LIKE SNAP RESPONSIVENESS)
-      const p = localPlayersRef.current[currentPlayerId];
-      if (p && p.status === 'alive') {
-        let dx = 0;
-        let dy = 0;
+      let p = localPlayersRef.current[currentPlayerId];
+      if (!p && room.players[currentPlayerId]) {
+        p = { ...room.players[currentPlayerId] };
+        localPlayersRef.current[currentPlayerId] = p;
+      }
 
-        // Seeker movement is locked during 'hiding' countdown; Spectators cannot move
-        const canMove = p.role !== 'spectator' && !(room.gameState === 'hiding' && p.role === 'seeker');
+      if (p && p.status === 'alive') {
+        const moveInput = getMovementInput();
+        let dx = moveInput.dx;
+        let dy = moveInput.dy;
+        const canMove = moveInput.canMove;
 
         if (canMove) {
-          // Keyboard controls (WASD & Arrow Keys)
-          if (keysPressed.current['w'] || keysPressed.current['keyw'] || keysPressed.current['arrowup']) dy -= 1;
-          if (keysPressed.current['s'] || keysPressed.current['keys'] || keysPressed.current['arrowdown']) dy += 1;
-          if (keysPressed.current['a'] || keysPressed.current['keya'] || keysPressed.current['arrowleft']) dx -= 1;
-          if (keysPressed.current['d'] || keysPressed.current['keyd'] || keysPressed.current['arrowright']) dx += 1;
-
-          // 360° Analog Virtual Joystick controls
-          if (joystickVectorRef.current.length > 0) {
-            dx = joystickVectorRef.current.dx;
-            dy = joystickVectorRef.current.dy;
-          }
-
-          // Mouse/Pointer dragging controls (for desktop)
-          if (!isMobile && isMouseDownRef.current && canvasRef.current) {
+          // Mouse/Pointer dragging controls (for desktop) if keyboard/joystick is idle
+          if (!isMobile && isMouseDownRef.current && canvasRef.current && dx === 0 && dy === 0) {
             const canvas = canvasRef.current;
             const rect = canvas.getBoundingClientRect();
             const clickX = mousePosRef.current.clientX - rect.left;
@@ -1611,7 +1573,7 @@ function GameView({
 
           // STAMINA & SPRINT ENGINE
           const isHider = p.role === 'hider';
-          const wantSprint = !!(keysPressed.current['shift'] || keysPressed.current['shiftleft'] || keysPressed.current['shiftright'] || mobileSprintActive.current);
+          const wantSprint = moveInput.isSprinting || mobileSprintActive.current;
           let isSprinting = false;
 
           if (isHider) {
@@ -1983,10 +1945,11 @@ function GameView({
         const leadX = (localVelocityRef.current?.x || 0) * 0.15;
         const leadY = (localVelocityRef.current?.y || 0) * 0.15;
 
-        let targetCamX = p ? p.x + leadX : MAP_WIDTH / 2;
-        let targetCamY = p ? p.y + leadY : MAP_HEIGHT / 2;
+        const activePlayer = p || localPlayersRef.current[currentPlayerId] || room.players[currentPlayerId];
+        let targetCamX = activePlayer ? activePlayer.x + leadX : MAP_WIDTH / 2;
+        let targetCamY = activePlayer ? activePlayer.y + leadY : MAP_HEIGHT / 2;
 
-        if (p?.role === 'spectator' && cameraFocusRef.current === 'self') {
+        if (activePlayer?.role === 'spectator' && cameraFocusRef.current === 'self') {
           const activePlayers = (Object.values(localPlayersRef.current) as Player[]).filter(pl => pl.role !== 'spectator' && pl.status === 'alive');
           if (activePlayers.length > 0) {
             targetCamX = activePlayers[0].x;
@@ -1995,7 +1958,7 @@ function GameView({
         }
 
         if (typeof cameraFocusRef.current === 'string' && cameraFocusRef.current !== 'self') {
-          const targetPlayer = localPlayersRef.current[cameraFocusRef.current];
+          const targetPlayer = localPlayersRef.current[cameraFocusRef.current] || room.players[cameraFocusRef.current];
           if (targetPlayer) {
             targetCamX = targetPlayer.x;
             targetCamY = targetPlayer.y;
@@ -2005,9 +1968,9 @@ function GameView({
           targetCamY = cameraFocusRef.current.y;
         }
 
-        // If camera is far from target (e.g. spawn or teleport), snap instantly without lerp delay
+        // If camera is uninitialized or far from target (e.g. spawn or teleport), snap instantly without lerp delay
         const distToCam = Math.hypot(targetCamX - cameraRef.current.x, targetCamY - cameraRef.current.y);
-        if (distToCam > 500) {
+        if (distToCam > 300 || cameraRef.current.x === 0 || cameraRef.current.y === 0) {
           cameraRef.current.x = targetCamX;
           cameraRef.current.y = targetCamY;
         } else {
