@@ -681,6 +681,11 @@ function GameView({
   useEffect(() => {
     if (room.gameState === 'hiding') {
       setIsHidingBannerDismissed(false);
+    } else if (room.gameState === 'playing') {
+      console.log('[COUNTDOWN FINISHED] Transitioning from Hiding phase to active Gameplay state!');
+      setIsLoadingAssets(false);
+      setIsSceneReady(true);
+      setIsHidingBannerDismissed(true);
     }
   }, [room.gameState]);
 
@@ -1496,6 +1501,19 @@ function GameView({
       const currentMap = getMapById(room.activeMapId || room.settings.mapId);
       const isExhausted = isExhaustedRef.current;
 
+      // Compute camera frustum culling bounds upfront for remote player interpolation & particle physics
+      const currentZoom = zoomRef.current || 0.85;
+      const halfViewportW = (cw / currentZoom) / 2;
+      const halfViewportH = (ch / currentZoom) / 2;
+      const camX = cameraRef.current?.x ?? (MAP_WIDTH / 2);
+      const camY = cameraRef.current?.y ?? (MAP_HEIGHT / 2);
+      const cullMinX = camX - halfViewportW - 350;
+      const cullMaxX = camX + halfViewportW + 350;
+      const cullMinY = camY - halfViewportH - 350;
+      const cullMaxY = camY + halfViewportH + 350;
+
+      try {
+
       if (!canvasInitializedRef.current) {
         canvasInitializedRef.current = true;
         console.log("[RENDERER INIT] Game canvas and 2D graphics context initialized.", {
@@ -1884,15 +1902,6 @@ function GameView({
           }
         }
       }
-
-      // Calculate camera bounds for frustum culling
-      const currentZoom = zoomRef.current;
-      const halfViewportW = (cw / currentZoom) / 2;
-      const halfViewportH = (ch / currentZoom) / 2;
-      const cullMinX = cameraRef.current.x - halfViewportW - 350;
-      const cullMaxX = cameraRef.current.x + halfViewportW + 350;
-      const cullMinY = cameraRef.current.y - halfViewportH - 350;
-      const cullMaxY = cameraRef.current.y + halfViewportH + 350;
 
       // 4. ANIMATION PARTICLES PHYSICS (WITH CAMERA FRUSTUM CULLING ON POOLED OBJECTS)
       const particlePool = particlePoolRef.current;
@@ -3156,8 +3165,11 @@ function GameView({
         });
         lastPerfUpdateTimeRef.current = timestamp;
       }
-
-      requestRef.current = requestAnimationFrame(gameLoop);
+      } catch (loopErr) {
+        console.error("[GAME LOOP ERROR RECOVERED]", loopErr);
+      } finally {
+        requestRef.current = requestAnimationFrame(gameLoop);
+      }
     };
 
     requestRef.current = requestAnimationFrame(gameLoop);
@@ -4930,4 +4942,64 @@ function GameView({
   );
 }
 
-export default React.memo(GameView);
+const MemoizedGameView = React.memo(GameView);
+
+export default function SafeGameView(props: React.ComponentProps<typeof GameView>) {
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleGlobalError = (event: ErrorEvent) => {
+      if (event.error && (event.error.message?.includes('cull') || event.error.message?.includes('Canvas') || event.error.stack?.includes('GameView'))) {
+        console.error("[GAMEVIEW ERROR RECOVERED]", event.error);
+        setHasError(true);
+        setErrorMessage(event.error.message || "Render exception");
+      }
+    };
+    window.addEventListener('error', handleGlobalError);
+    return () => window.removeEventListener('error', handleGlobalError);
+  }, []);
+
+  if (hasError) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center p-6 text-center text-white font-sans" id="gameview-error-boundary-screen">
+        <div className="max-w-md w-full p-8 bg-slate-900 border-2 border-rose-500/60 rounded-3xl shadow-2xl space-y-5">
+          <div className="w-16 h-16 mx-auto bg-rose-500/20 text-rose-400 rounded-2xl flex items-center justify-center text-3xl font-black">
+            ⚠️
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-xl font-black uppercase tracking-wider text-rose-400">Game Failed to Render</h2>
+            <p className="text-xs text-slate-300 font-medium leading-relaxed">
+              An unexpected rendering error occurred. You can retry rendering or return to the lobby safely.
+            </p>
+            {errorMessage && (
+              <div className="p-2.5 bg-slate-950 rounded-xl font-mono text-[10px] text-rose-300/80 overflow-x-auto text-left mt-2">
+                {errorMessage}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setHasError(false)}
+              className="flex-1 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition cursor-pointer active:scale-95 shadow-lg"
+            >
+              🔄 Retry Render
+            </button>
+            {props.onLeaveRoom && (
+              <button
+                type="button"
+                onClick={props.onLeaveRoom}
+                className="flex-1 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer active:scale-95 border border-white/10"
+              >
+                🚪 Return to Lobby
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <MemoizedGameView {...props} />;
+}
