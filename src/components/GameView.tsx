@@ -1939,7 +1939,7 @@ function GameView({
         zoomRef.current += (targetZoom - zoomRef.current) * Math.min(8 * deltaTime, 0.15);
 
         const z = zoomRef.current;
-        const lerpAmt = Math.min(12 * deltaTime, 0.20);
+        const lerpAmt = Math.min(1 - Math.exp(-16 * deltaTime), 0.35);
 
         // Smooth movement prediction forward lead for fluid camera tracking
         const leadX = (localVelocityRef.current?.x || 0) * 0.15;
@@ -3319,6 +3319,7 @@ function GameView({
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full block touch-none cursor-crosshair bg-slate-950"
+          style={{ transform: 'translate3d(0, 0, 0)', willChange: 'transform' }}
           id="game-canvas"
           onTouchStart={handleCanvasTouchStart}
           onTouchMove={handleTouchMove}
