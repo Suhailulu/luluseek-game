@@ -630,6 +630,9 @@ function GameView({
   const lastFootstepTimeRef = useRef<number>(0);
   const prevSprintingRef = useRef<boolean>(false);
   const shakeAmountRef = useRef<number>(0);
+  const triggerCameraShake = (intensity = 10) => {
+    shakeAmountRef.current = Math.max(shakeAmountRef.current, intensity);
+  };
 
   // Active Map based on room settings
   const currentMap = getMapById(room.activeMapId || room.settings.mapId);
@@ -754,6 +757,7 @@ function GameView({
 
     // Play a neat click sound
     soundManager.playClick();
+    triggerCameraShake(4);
 
     // Create a local ping particle/radar ring
     const localPlayer = room.players[currentPlayerId];
@@ -1058,7 +1062,7 @@ function GameView({
     const prevMe = prevPlayers[currentPlayerId];
     const me = room.players[currentPlayerId];
     if (prevMe && prevMe.status === 'alive' && me && me.status === 'found') {
-      shakeAmountRef.current = 15;
+      triggerCameraShake(24);
       setJustTaggedEffect(true);
       setTimeout(() => setJustTaggedEffect(false), 1200);
     }
@@ -1068,7 +1072,7 @@ function GameView({
       const prevP = prevPlayers[p.id];
       if (prevP && prevP.status === 'alive' && p.status === 'found') {
         if (p.id !== currentPlayerId) {
-          shakeAmountRef.current = 8;
+          triggerCameraShake(14);
         }
       }
     });
@@ -1081,11 +1085,13 @@ function GameView({
   useEffect(() => {
     if (room.gameState === 'playing') {
       soundManager.playMatchStart();
-      shakeAmountRef.current = 10;
+      triggerCameraShake(16);
       setMatchRewards(null);
+    } else if (room.gameState === 'hiding') {
+      triggerCameraShake(8);
     } else if (room.gameState === 'ended') {
       soundManager.playMatchEnd();
-      shakeAmountRef.current = 6;
+      triggerCameraShake(12);
 
       if (!matchRewards) {
         const localMe = room.players[currentPlayerId];
@@ -1530,10 +1536,39 @@ function GameView({
         }
       }
 
-      // 2. UPDATE CLIENT-SIDE PLAYER PHYSICS (WITH ARCADE-LIKE SNAP RESPONSIVENESS)
+      // 2. SYNCHRONIZE ROOM PLAYERS & HANDLE GAME STATE TRANSITIONS
+      const roomPlayers = room.players || {};
+      (Object.values(roomPlayers) as Player[]).forEach((pServer: Player) => {
+        let localEntry = localPlayersRef.current[pServer.id];
+        if (!localEntry) {
+          localEntry = { ...pServer };
+          localPlayersRef.current[pServer.id] = localEntry;
+        } else {
+          localEntry.role = pServer.role;
+          localEntry.status = pServer.status;
+          localEntry.color = pServer.color;
+          localEntry.name = pServer.name;
+        }
+      });
+
+      // Snap positions & camera on state transitions (e.g., hiding -> playing, lobby -> hiding)
+      if (lastGameStateRef.current !== room.gameState) {
+        lastGameStateRef.current = room.gameState;
+        (Object.values(roomPlayers) as Player[]).forEach((pServer: Player) => {
+          if (localPlayersRef.current[pServer.id]) {
+            localPlayersRef.current[pServer.id].x = pServer.x;
+            localPlayersRef.current[pServer.id].y = pServer.y;
+          }
+        });
+        if (roomPlayers[currentPlayerId]) {
+          cameraRef.current = { x: roomPlayers[currentPlayerId].x, y: roomPlayers[currentPlayerId].y };
+        }
+      }
+
+      // UPDATE CLIENT-SIDE LOCAL PLAYER PHYSICS
       let p = localPlayersRef.current[currentPlayerId];
-      if (!p && room.players[currentPlayerId]) {
-        p = { ...room.players[currentPlayerId] };
+      if (!p && roomPlayers[currentPlayerId]) {
+        p = { ...roomPlayers[currentPlayerId] };
         localPlayersRef.current[currentPlayerId] = p;
       }
 
@@ -1858,6 +1893,7 @@ function GameView({
                 if (distSq <= limitDistSq) {
                   onSendTagRef.current(other.id);
                   spawnParticles(other.x, other.y, 'spark', '#ef4444', 25);
+                  triggerCameraShake(20);
                 }
               }
             }
@@ -1892,141 +1928,138 @@ function GameView({
       }
 
       // 5. RESPONSIVE CAMERA INTERPOLATION & BOUNDS CLAMPING
-      if (p) {
-        const localMe = localPlayersRef.current[currentPlayerId];
-        const isHider = localMe?.role === 'hider';
-        const wantSprint = !!(keysPressed.current['shift'] || keysPressed.current['shiftleft'] || keysPressed.current['shiftright'] || mobileSprintActive.current);
-        const isSprinting = isHider && wantSprint && staminaRef.current > 0 && !isExhausted;
+      const localMe = localPlayersRef.current[currentPlayerId] || room.players[currentPlayerId];
+      const isHider = localMe?.role === 'hider';
+      const wantSprint = Boolean(keysPressed.current['shift'] || keysPressed.current['shiftleft'] || keysPressed.current['shiftright'] || mobileSprintActive.current);
+      const isSprinting = isHider && wantSprint && staminaRef.current > 0 && !isExhausted;
 
-        // Dynamic camera FOV: Player sprite occupies ~7% of viewport height
-        const targetPercent = 0.07; // 7.0% screen height target
-        const playerDiameter = PLAYER_RADIUS * 2; // 32 units
-        let baseZoom = (ch * targetPercent) / playerDiameter;
-        
-        // Clamp base zoom to a wide field-of-view range (0.42x to 1.10x)
-        baseZoom = Math.max(0.42, Math.min(baseZoom, 1.10));
+      // Dynamic camera FOV: Player sprite occupies ~7% of viewport height
+      const targetPercent = 0.07; // 7.0% screen height target
+      const playerDiameter = PLAYER_RADIUS * 2; // 32 units
+      let baseZoom = (ch * targetPercent) / playerDiameter;
+      
+      // Clamp base zoom to a wide field-of-view range (0.42x to 1.10x)
+      baseZoom = Math.max(0.42, Math.min(baseZoom, 1.10));
 
-        // Smoothly interpolate user camera zoom multiplier (200-300ms transition)
-        const userZoomLerp = Math.min(12 * deltaTime, 0.25);
-        userZoomCurrentRef.current += (userZoomTargetRef.current - userZoomCurrentRef.current) * userZoomLerp;
+      // Smoothly interpolate user camera zoom multiplier (200-300ms transition)
+      const userZoomLerp = Math.min(12 * deltaTime, 0.25);
+      userZoomCurrentRef.current += (userZoomTargetRef.current - userZoomCurrentRef.current) * userZoomLerp;
 
-        // Dynamic Tension & Match Phase Zoom Enhancements
-        let tensionFactor = 1.0;
-        if (localMe && room.gameState === 'playing') {
-          let minDistanceToOpponent = Infinity;
-          (Object.values(localPlayersRef.current) as Player[]).forEach((other: Player) => {
-            if (other.id !== localMe.id && other.status === 'alive') {
-              if ((localMe.role === 'hider' && other.role === 'seeker') || (localMe.role === 'seeker' && other.role === 'hider')) {
-                const dist = Math.hypot(other.x - localMe.x, other.y - localMe.y);
-                if (dist < minDistanceToOpponent) minDistanceToOpponent = dist;
-              }
+      // Dynamic Tension & Match Phase Zoom Enhancements
+      let tensionFactor = 1.0;
+      if (localMe && room.gameState === 'playing') {
+        let minDistanceToOpponent = Infinity;
+        (Object.values(localPlayersRef.current) as Player[]).forEach((other: Player) => {
+          if (other.id !== localMe.id && other.status === 'alive') {
+            if ((localMe.role === 'hider' && other.role === 'seeker') || (localMe.role === 'seeker' && other.role === 'hider')) {
+              const dist = Math.hypot(other.x - localMe.x, other.y - localMe.y);
+              if (dist < minDistanceToOpponent) minDistanceToOpponent = dist;
             }
-          });
-          if (minDistanceToOpponent < 220) {
-            const tensionRatio = 1 - (minDistanceToOpponent / 220);
-            tensionFactor += tensionRatio * 0.12; // Zoom in up to +12% when opponent is close for tension
           }
+        });
+        if (minDistanceToOpponent < 220) {
+          const tensionRatio = 1 - (minDistanceToOpponent / 220);
+          tensionFactor += tensionRatio * 0.12; // Zoom in up to +12% when opponent is close for tension
         }
+      }
 
-        // Final 30 seconds zoom out for heightened awareness
-        if (room.gameState === 'playing' && room.matchTimer <= 30 && room.matchTimer > 0) {
-          tensionFactor *= 0.90;
+      // Final 30 seconds zoom out for heightened awareness
+      if (room.gameState === 'playing' && room.matchTimer <= 30 && room.matchTimer > 0) {
+        tensionFactor *= 0.90;
+      }
+
+      const sprintFactor = isSprinting ? 0.92 : 1.0;
+      const targetZoom = baseZoom * userZoomCurrentRef.current * tensionFactor * sprintFactor;
+      
+      zoomRef.current += (targetZoom - zoomRef.current) * Math.min(8 * deltaTime, 0.15);
+
+      const lerpAmt = Math.min(1 - Math.exp(-18 * deltaTime), 0.35);
+
+      // Smooth movement prediction forward lead for fluid camera tracking
+      const leadX = (localVelocityRef.current?.x || 0) * 0.15;
+      const leadY = (localVelocityRef.current?.y || 0) * 0.15;
+
+      const activePlayer = localMe;
+      let targetCamX = activePlayer ? activePlayer.x + leadX : MAP_WIDTH / 2;
+      let targetCamY = activePlayer ? activePlayer.y + leadY : MAP_HEIGHT / 2;
+
+      if ((activePlayer?.role === 'spectator' || activePlayer?.status === 'found') && cameraFocusRef.current === 'self') {
+        const activePlayers = (Object.values(localPlayersRef.current) as Player[]).filter(pl => pl.role !== 'spectator' && pl.status === 'alive');
+        if (activePlayers.length > 0) {
+          targetCamX = activePlayers[0].x;
+          targetCamY = activePlayers[0].y;
         }
+      }
 
-        const sprintFactor = isSprinting ? 0.92 : 1.0;
-        const targetZoom = baseZoom * userZoomCurrentRef.current * tensionFactor * sprintFactor;
-        
-        zoomRef.current += (targetZoom - zoomRef.current) * Math.min(8 * deltaTime, 0.15);
-
-        const z = zoomRef.current;
-        const lerpAmt = Math.min(1 - Math.exp(-16 * deltaTime), 0.35);
-
-        // Smooth movement prediction forward lead for fluid camera tracking
-        const leadX = (localVelocityRef.current?.x || 0) * 0.15;
-        const leadY = (localVelocityRef.current?.y || 0) * 0.15;
-
-        const activePlayer = p || localPlayersRef.current[currentPlayerId] || room.players[currentPlayerId];
-        let targetCamX = activePlayer ? activePlayer.x + leadX : MAP_WIDTH / 2;
-        let targetCamY = activePlayer ? activePlayer.y + leadY : MAP_HEIGHT / 2;
-
-        if (activePlayer?.role === 'spectator' && cameraFocusRef.current === 'self') {
-          const activePlayers = (Object.values(localPlayersRef.current) as Player[]).filter(pl => pl.role !== 'spectator' && pl.status === 'alive');
-          if (activePlayers.length > 0) {
-            targetCamX = activePlayers[0].x;
-            targetCamY = activePlayers[0].y;
-          }
+      if (typeof cameraFocusRef.current === 'string' && cameraFocusRef.current !== 'self') {
+        const targetPlayer = localPlayersRef.current[cameraFocusRef.current] || room.players[cameraFocusRef.current];
+        if (targetPlayer) {
+          targetCamX = targetPlayer.x;
+          targetCamY = targetPlayer.y;
         }
+      } else if (typeof cameraFocusRef.current === 'object' && cameraFocusRef.current !== null) {
+        targetCamX = cameraFocusRef.current.x;
+        targetCamY = cameraFocusRef.current.y;
+      }
 
-        if (typeof cameraFocusRef.current === 'string' && cameraFocusRef.current !== 'self') {
-          const targetPlayer = localPlayersRef.current[cameraFocusRef.current] || room.players[cameraFocusRef.current];
-          if (targetPlayer) {
-            targetCamX = targetPlayer.x;
-            targetCamY = targetPlayer.y;
-          }
-        } else if (typeof cameraFocusRef.current === 'object' && cameraFocusRef.current !== null) {
-          targetCamX = cameraFocusRef.current.x;
-          targetCamY = cameraFocusRef.current.y;
-        }
+      // If camera is uninitialized or far from target (e.g. spawn or teleport), snap instantly without lerp delay
+      const distToCam = Math.hypot(targetCamX - cameraRef.current.x, targetCamY - cameraRef.current.y);
+      if (distToCam > 250 || cameraRef.current.x === 0 || cameraRef.current.y === 0) {
+        cameraRef.current.x = targetCamX;
+        cameraRef.current.y = targetCamY;
+      } else {
+        cameraRef.current.x += (targetCamX - cameraRef.current.x) * lerpAmt;
+        cameraRef.current.y += (targetCamY - cameraRef.current.y) * lerpAmt;
+      }
 
-        // If camera is uninitialized or far from target (e.g. spawn or teleport), snap instantly without lerp delay
-        const distToCam = Math.hypot(targetCamX - cameraRef.current.x, targetCamY - cameraRef.current.y);
-        if (distToCam > 300 || cameraRef.current.x === 0 || cameraRef.current.y === 0) {
-          cameraRef.current.x = targetCamX;
-          cameraRef.current.y = targetCamY;
-        } else {
-          cameraRef.current.x += (targetCamX - cameraRef.current.x) * lerpAmt;
-          cameraRef.current.y += (targetCamY - cameraRef.current.y) * lerpAmt;
-        }
+      // Prevent camera clipping outside map boundaries
+      const vwWorld = cw / zoomRef.current;
+      const vhWorld = ch / zoomRef.current;
+      const halfVW = vwWorld / 2;
+      const halfVH = vhWorld / 2;
 
-        // Prevent camera clipping outside map boundaries
-        const vwWorld = cw / zoomRef.current;
-        const vhWorld = ch / zoomRef.current;
-        const halfVW = vwWorld / 2;
-        const halfVH = vhWorld / 2;
+      if (MAP_WIDTH > vwWorld) {
+        cameraRef.current.x = Math.max(halfVW, Math.min(cameraRef.current.x, MAP_WIDTH - halfVW));
+      } else {
+        cameraRef.current.x = MAP_WIDTH / 2;
+      }
 
-        if (MAP_WIDTH > vwWorld) {
-          cameraRef.current.x = Math.max(halfVW, Math.min(cameraRef.current.x, MAP_WIDTH - halfVW));
-        } else {
-          cameraRef.current.x = MAP_WIDTH / 2;
-        }
+      if (MAP_HEIGHT > vhWorld) {
+        cameraRef.current.y = Math.max(halfVH, Math.min(cameraRef.current.y, MAP_HEIGHT - halfVH));
+      } else {
+        cameraRef.current.y = MAP_HEIGHT / 2;
+      }
 
-        if (MAP_HEIGHT > vhWorld) {
-          cameraRef.current.y = Math.max(halfVH, Math.min(cameraRef.current.y, MAP_HEIGHT - halfVH));
-        } else {
-          cameraRef.current.y = MAP_HEIGHT / 2;
-        }
+      // Sanity check to prevent NaN/infinite camera coordinates from causing a black screen
+      if (isNaN(cameraRef.current.x) || !isFinite(cameraRef.current.x)) {
+        console.warn("[CAMERA RECOVERY] Camera X was invalid! Resetting to center.");
+        cameraRef.current.x = MAP_WIDTH / 2;
+      }
+      if (isNaN(cameraRef.current.y) || !isFinite(cameraRef.current.y)) {
+        console.warn("[CAMERA RECOVERY] Camera Y was invalid! Resetting to center.");
+        cameraRef.current.y = MAP_HEIGHT / 2;
+      }
+      if (isNaN(zoomRef.current) || !isFinite(zoomRef.current) || zoomRef.current <= 0) {
+        console.warn("[CAMERA RECOVERY] Camera Zoom was invalid! Resetting to 0.85.");
+        zoomRef.current = 0.85;
+      }
 
-        // Sanity check to prevent NaN/infinite camera coordinates from causing a black screen
-        if (isNaN(cameraRef.current.x) || !isFinite(cameraRef.current.x)) {
-          console.warn("[CAMERA RECOVERY] Camera X was invalid! Resetting to center.");
-          cameraRef.current.x = MAP_WIDTH / 2;
-        }
-        if (isNaN(cameraRef.current.y) || !isFinite(cameraRef.current.y)) {
-          console.warn("[CAMERA RECOVERY] Camera Y was invalid! Resetting to center.");
-          cameraRef.current.y = MAP_HEIGHT / 2;
-        }
-        if (isNaN(zoomRef.current) || !isFinite(zoomRef.current) || zoomRef.current <= 0) {
-          console.warn("[CAMERA RECOVERY] Camera Zoom was invalid! Resetting to 0.85.");
-          zoomRef.current = 0.85;
-        }
-
-        // Print requested browser console telemetry every 2.5 seconds
-        if (timestamp - lastDiagTimeRef.current >= 2500) {
-          lastDiagTimeRef.current = timestamp;
-          const playerSpritePx = playerDiameter * zoomRef.current;
-          const playerPercent = (playerSpritePx / ch) * 100;
-          console.log(`[GAMEPLAY CAMERA & VIEWPORT AUDIT]`, {
-            currentCameraZoom: Number(zoomRef.current.toFixed(3)),
-            cameraPosition: `X:${cameraRef.current.x.toFixed(1)}, Y:${cameraRef.current.y.toFixed(1)}`,
-            canvasBufferSize: `${canvas.width}x${canvas.height}`,
-            canvasCssSize: `${cw}x${ch}`,
-            worldSize: `${currentMap.width}x${currentMap.height}`,
-            devicePixelRatio: dpr,
-            viewportSize: `${window.innerWidth}x${window.innerHeight}`,
-            playerSpriteScale: `${playerPercent.toFixed(1)}% of screen height (${playerSpritePx.toFixed(1)}px / ${ch}px)`,
-            networkPingMs: ping
-          });
-        }
+      // Print requested browser console telemetry every 2.5 seconds
+      if (timestamp - lastDiagTimeRef.current >= 2500) {
+        lastDiagTimeRef.current = timestamp;
+        const playerSpritePx = playerDiameter * zoomRef.current;
+        const playerPercent = (playerSpritePx / ch) * 100;
+        console.log(`[GAMEPLAY CAMERA & VIEWPORT AUDIT]`, {
+          currentCameraZoom: Number(zoomRef.current.toFixed(3)),
+          cameraPosition: `X:${cameraRef.current.x.toFixed(1)}, Y:${cameraRef.current.y.toFixed(1)}`,
+          canvasBufferSize: `${canvas.width}x${canvas.height}`,
+          canvasCssSize: `${cw}x${ch}`,
+          worldSize: `${currentMap.width}x${currentMap.height}`,
+          devicePixelRatio: dpr,
+          viewportSize: `${window.innerWidth}x${window.innerHeight}`,
+          playerSpriteScale: `${playerPercent.toFixed(1)}% of screen height (${playerSpritePx.toFixed(1)}px / ${ch}px)`,
+          networkPingMs: ping
+        });
       }
 
       // Decay camera shake amount
@@ -2414,9 +2447,9 @@ function GameView({
       }
 
       // Gather current roles
-      const localMe = localPlayersRef.current[currentPlayerId];
-      const meIsSeeker = localMe?.role === 'seeker';
-      const meIsSpectator = localMe?.role === 'spectator' || localMe?.status === 'found';
+      const activeLocalMe = localPlayersRef.current[currentPlayerId] || localMe;
+      const meIsSeeker = activeLocalMe?.role === 'seeker';
+      const meIsSpectator = activeLocalMe?.role === 'spectator' || activeLocalMe?.status === 'found';
 
       // Draw Players under Bushes (so bushes render on top, making players hidden!)
       const playersList = Object.values(localPlayersRef.current) as Player[];
@@ -2428,7 +2461,7 @@ function GameView({
           }
         }
         const playerBushId = getHidingBushId(player.x, player.y, PLAYER_RADIUS, currentMap);
-        const myBushId = localMe ? getHidingBushId(localMe.x, localMe.y, PLAYER_RADIUS, currentMap) : null;
+        const myBushId = activeLocalMe ? getHidingBushId(activeLocalMe.x, activeLocalMe.y, PLAYER_RADIUS, currentMap) : null;
 
         // VISIBILITY LOGIC
         // Hiders & Spectators always see all players.
@@ -4489,6 +4522,7 @@ function GameView({
                   if (Math.sqrt(dx * dx + dy * dy) <= PLAYER_RADIUS * 2.5 + 10) {
                     onSendTagRef.current(other.id);
                     spawnParticles(other.x, other.y, 'spark', '#ef4444', 25);
+                    triggerCameraShake(20);
                   }
                 }
               });
