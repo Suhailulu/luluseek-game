@@ -990,9 +990,9 @@ function GameView({
         const dy = p.y - localP.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
 
-        // Reconcile/snap if server state is significantly different (e.g. walk-back, tagged, or phase change)
+        // Reconcile/snap if server state is significantly different (e.g. forced teleport, walk-back, tagged, or phase change)
         const forcedSync = roleChanged || statusChanged || room.gameState !== lastGameStateRef.current;
-        if (dist > 30 || forcedSync) {
+        if (dist > 250 || forcedSync) {
           console.log(`[STATE SYNC] Local player position/state reconciled. Role=${p.role}, Status=${p.status}, Pos=(${p.x}, ${p.y})`);
           localP.x = p.x;
           localP.y = p.y;
@@ -1001,8 +1001,8 @@ function GameView({
           }
         } else if (dist > 2) {
           // Smoothly reconcile small position drifts (server reconciliation)
-          localP.x += (p.x - localP.x) * 0.15;
-          localP.y += (p.y - localP.y) * 0.15;
+          localP.x += (p.x - localP.x) * 0.05;
+          localP.y += (p.y - localP.y) * 0.05;
         }
       } else {
         // Remote Player: Keep track of target coordinates & speed for extrapolation LERP
@@ -2012,23 +2012,19 @@ function GameView({
         cameraRef.current.y += (targetCamY - cameraRef.current.y) * lerpAmt;
       }
 
-      // Prevent camera clipping outside map boundaries
+      // Prevent camera clipping outside map boundaries while ensuring continuous player tracking
       const vwWorld = cw / zoomRef.current;
       const vhWorld = ch / zoomRef.current;
       const halfVW = vwWorld / 2;
       const halfVH = vhWorld / 2;
 
-      if (MAP_WIDTH > vwWorld) {
-        cameraRef.current.x = Math.max(halfVW, Math.min(cameraRef.current.x, MAP_WIDTH - halfVW));
-      } else {
-        cameraRef.current.x = MAP_WIDTH / 2;
-      }
+      const minCamX = halfVW < MAP_WIDTH / 2 ? halfVW : MAP_WIDTH / 2;
+      const maxCamX = halfVW < MAP_WIDTH / 2 ? MAP_WIDTH - halfVW : MAP_WIDTH / 2;
+      cameraRef.current.x = Math.max(minCamX, Math.min(cameraRef.current.x, maxCamX));
 
-      if (MAP_HEIGHT > vhWorld) {
-        cameraRef.current.y = Math.max(halfVH, Math.min(cameraRef.current.y, MAP_HEIGHT - halfVH));
-      } else {
-        cameraRef.current.y = MAP_HEIGHT / 2;
-      }
+      const minCamY = halfVH < MAP_HEIGHT / 2 ? halfVH : MAP_HEIGHT / 2;
+      const maxCamY = halfVH < MAP_HEIGHT / 2 ? MAP_HEIGHT - halfVH : MAP_HEIGHT / 2;
+      cameraRef.current.y = Math.max(minCamY, Math.min(cameraRef.current.y, maxCamY));
 
       // Sanity check to prevent NaN/infinite camera coordinates from causing a black screen
       if (isNaN(cameraRef.current.x) || !isFinite(cameraRef.current.x)) {
@@ -2088,7 +2084,19 @@ function GameView({
       const shakeX = currentShake > 0 ? (Math.random() - 0.5) * currentShake : 0;
       const shakeY = currentShake > 0 ? (Math.random() - 0.5) * currentShake : 0;
 
-      ctx.translate(-cameraRef.current.x + shakeX, -cameraRef.current.y + shakeY);
+      const finalTranslateX = -cameraRef.current.x + shakeX;
+      const finalTranslateY = -cameraRef.current.y + shakeY;
+
+      ctx.translate(finalTranslateX, finalTranslateY);
+
+      const transformString = `translate(${(cw / 2).toFixed(1)}px, ${(ch / 2).toFixed(1)}px) scale(${zVal.toFixed(3)}) translate(${finalTranslateX.toFixed(1)}px, ${finalTranslateY.toFixed(1)}px)`;
+      const playerWorldX = activePlayer ? activePlayer.x : cameraRef.current.x;
+      const playerWorldY = activePlayer ? activePlayer.y : cameraRef.current.y;
+      const playerScreenX = cw / 2 + (playerWorldX - cameraRef.current.x) * zVal;
+      const playerScreenY = ch / 2 + (playerWorldY - cameraRef.current.y) * zVal;
+
+      // Log local player world position and applied transform string on every frame
+      console.log(`[CAMERA & PLAYER TRANSFORM] Player World: (${playerWorldX.toFixed(1)}, ${playerWorldY.toFixed(1)}) | Camera World: (${cameraRef.current.x.toFixed(1)}, ${cameraRef.current.y.toFixed(1)}) | Applied Transform: "${transformString}" | Player Screen: (${playerScreenX.toFixed(1)}, ${playerScreenY.toFixed(1)})`);
 
       // Draw Cartoon Ground Base
       ctx.fillStyle = theme.ground;
